@@ -5,6 +5,8 @@
 
 namespace
 {
+    // Base64 解码工具函数。
+    // 将输入字符串解码到 output 缓冲区，并返回实际解码长度 decodedLen。
     bool base64Decode(const String &input, uint8_t *output, size_t outputSize, size_t &decodedLen)
     {
         int ret = mbedtls_base64_decode(
@@ -16,6 +18,8 @@ namespace
         return ret == 0;
     }
 
+    // Base64 编码工具函数。
+    // 分两步完成：先获取所需长度，再分配缓冲区进行正式编码。
     bool base64Encode(const uint8_t *input, size_t inputLen, String &output)
     {
         size_t requiredLen = 0;
@@ -51,6 +55,9 @@ namespace
         return true;
     }
 
+    // 对 token 中 value 做 URL 编码。
+    // OneNET 文档要求 token 的 value 部分必须进行 URL 编码，
+    // 例如 '/' -> %2F, '=' -> %3D。
     String urlEncodeValue(const String &value)
     {
         String encoded;
@@ -81,6 +88,7 @@ namespace
         return encoded;
     }
 
+    // 根据签名方法映射到 mbedTLS 的消息摘要算法描述。
     const mbedtls_md_info_t *getMdInfo(OneNetSignMethod method)
     {
         switch (method)
@@ -96,6 +104,7 @@ namespace
     }
 }
 
+// 将内部枚举转为协议字符串。
 String oneNetSignMethodToString(OneNetSignMethod method)
 {
     switch (method)
@@ -117,11 +126,13 @@ String generateOneNetToken(
     OneNetSignMethod method,
     const String &version)
 {
+    // 基础参数校验，避免进入后续签名流程后才报错。
     if (base64Key.isEmpty() || resource.isEmpty())
     {
         return "";
     }
 
+    // OneNET 要求先将 key 做 Base64 解码，再参与 HMAC 计算。
     uint8_t decodedKey[128] = {0};
     size_t keyLen = 0;
     if (!base64Decode(base64Key, decodedKey, sizeof(decodedKey), keyLen) || keyLen == 0)
@@ -129,16 +140,20 @@ String generateOneNetToken(
         return "";
     }
 
+    // 按文档固定顺序构造 StringForSignature：
+    // et + '\n' + method + '\n' + res + '\n' + version
     String methodStr = oneNetSignMethodToString(method);
     String et = String(expirationTime);
     String stringForSignature = et + "\n" + methodStr + "\n" + resource + "\n" + version;
 
+    // 获取 HMAC 使用的摘要算法。
     const mbedtls_md_info_t *mdInfo = getMdInfo(method);
     if (mdInfo == nullptr)
     {
         return "";
     }
 
+    // 计算 HMAC 结果。
     uint8_t hmacOutput[32] = {0};
     int hmacRet = mbedtls_md_hmac(
         mdInfo,
@@ -152,6 +167,7 @@ String generateOneNetToken(
         return "";
     }
 
+    // 对 HMAC 结果再次做 Base64，得到 sign 原始值。
     size_t hmacLen = mbedtls_md_get_size(mdInfo);
     String signBase64;
     if (!base64Encode(hmacOutput, hmacLen, signBase64))
@@ -159,6 +175,8 @@ String generateOneNetToken(
         return "";
     }
 
+    // 组装最终 token。
+    // 注意：每个字段的 value 都必须 URL 编码。
     String token = "version=" + urlEncodeValue(version) +
                    "&res=" + urlEncodeValue(resource) +
                    "&et=" + urlEncodeValue(et) +
