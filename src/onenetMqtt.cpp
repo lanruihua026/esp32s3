@@ -42,20 +42,6 @@ namespace
         return String("products/") + gConfig.productId + "/devices/" + gConfig.deviceName;
     }
 
-    // 尝试获取上报时间戳（毫秒）。
-    // 仅当系统时间（Unix 时间）有效时返回 true。
-    // OneNET 文档中 time 字段为可选，系统时间无效时应省略该字段。
-    bool tryGetReportTimestampMs(uint64_t &timestampMs)
-    {
-        time_t now = time(nullptr);
-        if (now > 1700000000)
-        {
-            timestampMs = static_cast<uint64_t>(now) * 1000ULL;
-            return true;
-        }
-        return false;
-    }
-
     // 生成 OneJSON 的 id 字段。
     // 这里使用 millis 作为简单消息序号。
     String buildMessageId()
@@ -184,9 +170,6 @@ bool oneNetMqttUploadProperties(bool isFull, int32_t weight)
 
     // OneJSON 公共字段。
     String msgId = buildMessageId();
-    uint64_t tsMs = 0;
-    bool hasValidTimestamp = tryGetReportTimestampMs(tsMs);
-
     // 组装 OneJSON 属性上报数据。
     // 文档格式：
     // {
@@ -201,17 +184,8 @@ bool oneNetMqttUploadProperties(bool isFull, int32_t weight)
     payload += "{\"id\":\"" + msgId + "\",\"version\":\"1.0\",\"params\":{";
     payload += "\"isFull\":{\"value\":";
     payload += (isFull ? "true" : "false");
-    if (hasValidTimestamp)
-    {
-        payload += ",\"time\":" + String(tsMs);
-    }
     payload += "},";
-    payload += "\"weight\":{\"value\":" + String(weight);
-    if (hasValidTimestamp)
-    {
-        payload += ",\"time\":" + String(tsMs);
-    }
-    payload += "}";
+    payload += "\"weight\":{\"value\":" + String(weight) + "}";
     payload += "}}";
 
     // 发布到 OneNET 物模型属性上报 Topic。
