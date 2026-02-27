@@ -47,6 +47,9 @@ void loop()
   // 维持 MQTT 心跳、接收消息、自动重连。
   oneNetMqttLoop();
 
+  // 更新OLED显示（页面切换）
+  updateOLEDDisplay();
+
   // 每 10 秒上报一次属性。
   uint32_t now = millis();
   if (oneNetMqttConnected() && now - lastReportMs >= 10000)
@@ -62,6 +65,9 @@ void loop()
 
     // 业务规则示例：重量 >= 400kg 认为仓格已满。
     bool isFull = (mockWeight >= 400);
+
+    // 设置上传状态为true，触发上传动画
+    setUploadingStatus(true);
 
     // 按 OneJSON 物模型格式上报 isFull 与 weight。
     oneNetMqttUploadProperties(isFull, mockWeight);
