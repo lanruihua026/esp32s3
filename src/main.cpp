@@ -3,6 +3,9 @@
 #include "connectToWiFi.h"
 #include "onenetMqtt.h"
 
+// ====部分宏定义====
+#define Warnlight 6 // 警示灯 GPIO 引脚
+
 // ===== OneNET 设备身份信息 =====
 // ONENET_PRODUCT_ID: 产品 ID（来自 OneNET 平台）
 // ONENET_DEVICE_NAME: 设备名称（需与平台设备一致）
@@ -20,9 +23,10 @@ static int32_t mockWeight = 10;
 
 void setup()
 {
-  Serial.begin(115200); // 初始化串口通信，方便调试输出
-  setupOLED();          // 初始化 OLED 显示
-  setupWiFi();          // 连接 WiFi 网络
+  Serial.begin(115200);       // 初始化串口通信，方便调试输出
+  setupOLED();                // 初始化 OLED 显示
+  setupWiFi();                // 连接 WiFi 网络
+  pinMode(Warnlight, OUTPUT); // 设置警示灯引脚为输出模式
 
   // 配置 OneNET MQTT 连接参数。
   // tokenExpireAt 示例设置为较远未来时间，避免短期内过期。
@@ -61,6 +65,17 @@ void loop()
     if (mockWeight > 500)
     {
       mockWeight = 0;
+      digitalWrite(Warnlight, LOW);
+    }
+    else if (mockWeight >= 400)
+    {
+      // 当重量达到 400kg 时，点亮警示灯。
+      digitalWrite(Warnlight, HIGH);
+    }
+    else
+    {
+      // 重量低于 400kg 时，关闭警示灯。
+      digitalWrite(Warnlight, LOW);
     }
 
     // 业务规则示例：重量 >= 400kg 认为仓格已满。
