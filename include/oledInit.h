@@ -13,13 +13,11 @@
 #define SDA_PIN 4
 #define SCL_PIN 5
 
-// 页面切换间隔（毫秒）
-#define PAGE_SWITCH_INTERVAL 3000
-
 extern Adafruit_SSD1306 oledDisplay; // 声明 OLED 显示对象
 
 void setupOLED();                          // 声明 OLED 初始化函数
-void updateOLEDDisplay();                  // 更新OLED显示（页面切换）
+void updateOLEDDisplay();                  // 更新OLED显示
 void setUploadingStatus(bool isUploading); // 设置上传状态
+void setCurrentWeight(int32_t weight);     // 设置当前重量值
 
 #endif

@@ -19,7 +19,7 @@ static uint32_t lastReportMs = 0;
 
 // 演示用模拟重量值。
 // 实际项目中可替换为 HX711 等称重传感器读数。
-static int32_t mockWeight = 10;
+static int32_t mockWeight = 300;
 
 void setup()
 {
@@ -51,7 +51,7 @@ void loop()
   // 维持 MQTT 心跳、接收消息、自动重连。
   oneNetMqttLoop();
 
-  // 更新OLED显示（页面切换）
+  // 更新OLED显示（综合信息页面）
   updateOLEDDisplay();
 
   // 每 10 秒上报一次属性。
@@ -64,7 +64,7 @@ void loop()
     mockWeight += 15;
     if (mockWeight > 500)
     {
-      mockWeight = 0;
+      mockWeight = 300;
       digitalWrite(Warnlight, LOW);
     }
     else if (mockWeight >= 400)
@@ -80,6 +80,9 @@ void loop()
 
     // 业务规则示例：重量 >= 400kg 认为仓格已满。
     bool isFull = (mockWeight >= 400);
+
+    // 更新本地重量显示
+    setCurrentWeight(mockWeight);
 
     // 设置上传状态为true，触发上传动画
     setUploadingStatus(true);
