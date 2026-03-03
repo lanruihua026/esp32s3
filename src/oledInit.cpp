@@ -4,11 +4,11 @@
 Adafruit_SSD1306 oledDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // 显示状态变量
-static bool uploadingActive = false;  // 是否正在上传数据
-static int32_t currentWeight = 0;     // 当前重量值
-static uint8_t animationFrame = 0;    // 动画帧计数
-static uint32_t lastAnimationMs = 0;  // 上次动画更新时间
-#define ANIMATION_INTERVAL 300        // 动画更新间隔（毫秒）
+static bool uploadingActive = false; // 是否正在上传数据
+static int32_t currentWeight = 0;    // 当前重量值
+static uint8_t animationFrame = 0;   // 动画帧计数
+static uint32_t lastAnimationMs = 0; // 上次动画更新时间
+#define ANIMATION_INTERVAL 300       // 动画更新间隔（毫秒）
 
 // 设置上传状态
 void setUploadingStatus(bool isUploading)
@@ -54,7 +54,7 @@ static void showCombinedPage()
     oledDisplay.setCursor(0, 24);
     oledDisplay.print("Weight: ");
     oledDisplay.print(currentWeight);
-    oledDisplay.println(" kg");
+    oledDisplay.println(" g");
 
     // 第4行：满溢状态
     oledDisplay.setCursor(0, 36);

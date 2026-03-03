@@ -2,9 +2,12 @@
 #include "oledInit.h"
 #include "connectToWiFi.h"
 #include "onenetMqtt.h"
+#include "hx711.h"
 
 // ====部分宏定义====
-#define Warnlight 6 // 警示灯 GPIO 引脚
+#define Warnlight 6              // 警示灯 GPIO 引脚
+#define FULL_WEIGHT 400          // 满溢阈值（克）
+#define HX711_CAL_FACTOR 1000.0f // HX711 校准因子（无砝码时可先调此值）
 
 // ===== OneNET 设备身份信息 =====
 // ONENET_PRODUCT_ID: 产品 ID（来自 OneNET 平台）
@@ -16,15 +19,18 @@ static const char *ONENET_BASE64_KEY = "T0R5ejYyM1JrT2VuczBkZllINmZuazRicEMxc29x
 
 // 上报节流时间戳（毫秒）
 static uint32_t lastReportMs = 0;
+// 称重采样节流时间戳（毫秒）
+static uint32_t lastSampleMs = 0;
 
-// 演示用模拟重量值。
-// 实际项目中可替换为 HX711 等称重传感器读数。
-static int32_t mockWeight = 300;
+// 当前真实重量值
+static int32_t currentWeight = 0;
 
 void setup()
 {
-  Serial.begin(115200);       // 初始化串口通信，方便调试输出
-  setupOLED();                // 初始化 OLED 显示
+  Serial.begin(115200); // 初始化串口通信，方便调试输出
+  setupOLED();          // 初始化 OLED 显示
+  setupHX711();         // 初始化 HX711 称重传感器
+  setCalibrationFactor(HX711_CAL_FACTOR);
   setupWiFi();                // 连接 WiFi 网络
   pinMode(Warnlight, OUTPUT); // 设置警示灯引脚为输出模式
 
@@ -43,51 +49,49 @@ void setup()
   oneNetMqttBegin(cfg);
 
   lastReportMs = millis();
+  lastSampleMs = millis();
   Serial.println("Setup complete");
 }
 
 void loop()
 {
+  uint32_t now = millis();
+
   // 维持 MQTT 心跳、接收消息、自动重连。
   oneNetMqttLoop();
 
   // 更新OLED显示（综合信息页面）
   updateOLEDDisplay();
 
-  // 每 10 秒上报一次属性。
-  uint32_t now = millis();
-  if (oneNetMqttConnected() && now - lastReportMs >= 10000)
+  // 每 500ms 读取一次真实重量，供本地显示与告警使用。
+  if (now - lastSampleMs >= 500)
   {
-    lastReportMs = now;
+    lastSampleMs = now;
+    currentWeight = (int32_t)getWeight();
+    setCurrentWeight(currentWeight);
 
-    // 演示数据：重量每次 +15，超过 500 后回到 0。
-    mockWeight += 15;
-    if (mockWeight > 500)
+    if (currentWeight >= FULL_WEIGHT)
     {
-      mockWeight = 300;
-      digitalWrite(Warnlight, LOW);
-    }
-    else if (mockWeight >= 400)
-    {
-      // 当重量达到 400kg 时，点亮警示灯。
       digitalWrite(Warnlight, HIGH);
     }
     else
     {
-      // 重量低于 400kg 时，关闭警示灯。
       digitalWrite(Warnlight, LOW);
     }
+  }
 
-    // 业务规则示例：重量 >= 400kg 认为仓格已满。
-    bool isFull = (mockWeight >= 400);
+  // 每 10 秒上报一次属性。
+  if (oneNetMqttConnected() && now - lastReportMs >= 10000)
+  {
+    lastReportMs = now;
 
-    // 更新本地重量显示
-    setCurrentWeight(mockWeight);
+    // 业务规则：重量 >= FULL_WEIGHT 认为仓格已满
+    bool isFull = (currentWeight >= FULL_WEIGHT);
 
     // 设置上传状态为true，触发上传动画
     setUploadingStatus(true);
 
-    // 按 OneJSON 物模型格式上报 isFull 与 weight。
-    oneNetMqttUploadProperties(isFull, mockWeight);
+    // 按 OneJSON 物模型格式上报 isFull 与 weight
+    oneNetMqttUploadProperties(isFull, currentWeight);
   }
 }
