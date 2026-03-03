@@ -113,6 +113,51 @@ void updateOLEDDisplay()
     showCombinedPage();
 }
 
+// 显示初始化进度条
+void showBootProgress(uint8_t progress, const char *statusText)
+{
+    const uint8_t barX = 10;        // 进度条起始X坐标
+    const uint8_t barY = 40;        // 进度条Y坐标
+    const uint8_t barWidth = 108;   // 进度条总宽度
+    const uint8_t barHeight = 12;   // 进度条高度
+
+    oledDisplay.clearDisplay();
+    oledDisplay.setTextSize(1);
+    oledDisplay.setTextColor(SSD1306_WHITE);
+
+    // 第1行：标题
+    oledDisplay.setCursor(25, 0);
+    oledDisplay.println("System Boot");
+
+    // 第2-3行：当前初始化状态
+    oledDisplay.setCursor(0, 16);
+    oledDisplay.println("Initializing...");
+    oledDisplay.setCursor(0, 28);
+    // 显示当前状态文本（最多16个字符）
+    char displayText[17];
+    strncpy(displayText, statusText, 16);
+    displayText[16] = '\0';
+    oledDisplay.print("> ");
+    oledDisplay.println(displayText);
+
+    // 绘制进度条外框
+    oledDisplay.drawRect(barX, barY, barWidth, barHeight, SSD1306_WHITE);
+
+    // 计算并绘制进度填充
+    uint8_t fillWidth = (uint8_t)((progress * (barWidth - 4)) / 100);
+    if (fillWidth > 0)
+    {
+        oledDisplay.fillRect(barX + 2, barY + 2, fillWidth, barHeight - 4, SSD1306_WHITE);
+    }
+
+    // 显示进度百分比
+    oledDisplay.setCursor(50, 54);
+    oledDisplay.print(progress);
+    oledDisplay.println("%");
+
+    oledDisplay.display();
+}
+
 void setupOLED()
 {
     // 初始化 I2C：指定 SDA/SCL 引脚和 400kHz 速率
@@ -127,15 +172,8 @@ void setupOLED()
         }
     }
 
-    // 显示开机与硬件信息
-    oledDisplay.clearDisplay();
-    oledDisplay.setTextSize(1);
-    oledDisplay.setTextColor(SSD1306_WHITE);
-    oledDisplay.setCursor(0, 0);
-    oledDisplay.println("Hello ESP32!");
-    oledDisplay.println("SSD1306 OK");
-    oledDisplay.printf("SDA:%d SCL:%d\n", SDA_PIN, SCL_PIN);
-    oledDisplay.display();
+    // 显示开机动画框架
+    showBootProgress(0, "OLED Ready");
 
     // 初始化动画计时器
     lastAnimationMs = millis();

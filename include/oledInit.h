@@ -20,4 +20,7 @@ void updateOLEDDisplay();                  // 更新OLED显示
 void setUploadingStatus(bool isUploading); // 设置上传状态
 void setCurrentWeight(int32_t weight);     // 设置当前重量值
 
+// 初始化进度条显示函数
+void showBootProgress(uint8_t progress, const char *statusText);
+
 #endif

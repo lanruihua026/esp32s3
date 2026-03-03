@@ -28,14 +28,48 @@ static int32_t currentWeight = 0;
 void setup()
 {
   Serial.begin(115200); // 初始化串口通信，方便调试输出
-  setupOLED();          // 初始化 OLED 显示
-  setupHX711();         // 初始化 HX711 称重传感器
-  setCalibrationFactor(HX711_CAL_FACTOR);
-  setupWiFi();                // 连接 WiFi 网络
-  pinMode(Warnlight, OUTPUT); // 设置警示灯引脚为输出模式
 
-  // 配置 OneNET MQTT 连接参数。
-  // tokenExpireAt 示例设置为较远未来时间，避免短期内过期。
+  // 第1步：初始化 OLED 显示 (0-20%)
+  setupOLED();  // 内部已显示 0% 进度
+
+  // 第2步：初始化 HX711 称重传感器 (20-40%)
+  showBootProgress(20, "HX711 Sensor");
+  setupHX711();
+  delay(100); // 短暂延时让进度可见
+
+  showBootProgress(30, "Calibration");
+  setCalibrationFactor(HX711_CAL_FACTOR);
+  delay(100);
+
+  // 第3步：连接 WiFi 网络 (40-70%)
+  showBootProgress(40, "WiFi Connecting");
+  setupWiFi();
+  // WiFi连接需要一些时间，显示动态进度
+  uint8_t wifiProgress = 40;
+  while (WiFi.status() != WL_CONNECTED && wifiProgress < 65)
+  {
+    delay(200);
+    wifiProgress += 5;
+    showBootProgress(wifiProgress, "WiFi Connecting");
+  }
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    showBootProgress(70, "WiFi Connected");
+  }
+  else
+  {
+    showBootProgress(70, "WiFi Failed");
+  }
+  delay(200);
+
+  // 第4步：设置警示灯引脚 (70-80%)
+  showBootProgress(80, "Warning Light");
+  pinMode(Warnlight, OUTPUT);
+  delay(100);
+
+  // 第5步：初始化 OneNET MQTT (80-100%)
+  showBootProgress(85, "OneNET MQTT");
   OneNetMqttConfig cfg = {
       "mqtts.heclouds.com",
       1883,
@@ -44,9 +78,12 @@ void setup()
       ONENET_BASE64_KEY,
       1893456000,
       OneNetSignMethod::SHA256};
-
-  // 初始化 OneNET MQTT 模块（内部会在 loop 中自动尝试连接）。
   oneNetMqttBegin(cfg);
+
+  showBootProgress(95, "System Ready");
+  delay(200);
+  showBootProgress(100, "Starting...");
+  delay(300);
 
   lastReportMs = millis();
   lastSampleMs = millis();
