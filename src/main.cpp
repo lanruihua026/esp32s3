@@ -1,50 +1,49 @@
-#include <Arduino.h>
-#include "oledInit.h"
+﻿#include <Arduino.h>
+
 #include "connectToWiFi.h"
-#include "onenetMqtt.h"
 #include "hx711.h"
+#include "oledInit.h"
+#include "onenetMqtt.h"
 
-// ====部分宏定义====
-#define Warnlight 6              // 警示灯 GPIO 引脚
-#define FULL_WEIGHT 400          // 满溢阈值（克）
-#define HX711_CAL_FACTOR 1000.0f // HX711 校准因子（无砝码时可先调此值）
+// ===== 业务参数 =====
+#define Warnlight 6               // 告警灯 GPIO
+#define FULL_WEIGHT 400           // 满载阈值（当前按克处理）
+#define HX711_CAL_FACTOR 1000.0f  // HX711 校准因子（raw/g）
 
-// ===== OneNET 设备身份信息 =====
-// ONENET_PRODUCT_ID: 产品 ID（来自 OneNET 平台）
-// ONENET_DEVICE_NAME: 设备名称（需与平台设备一致）
-// ONENET_BASE64_KEY: 设备密钥（Base64 编码）
+// ===== OneNET 设备身份 =====
+// 说明：这些信息需要与你在 OneNET 平台创建的产品/设备保持一致。
 static const char *ONENET_PRODUCT_ID = "f45hkc7xC7";
 static const char *ONENET_DEVICE_NAME = "Box1";
 static const char *ONENET_BASE64_KEY = "T0R5ejYyM1JrT2VuczBkZllINmZuazRicEMxc29xcnk=";
 
-// 上报节流时间戳（毫秒）
-static uint32_t lastReportMs = 0;
-// 称重采样节流时间戳（毫秒）
-static uint32_t lastSampleMs = 0;
+// 定时任务时间戳
+static uint32_t lastReportMs = 0; // 上次上报属性时间
+static uint32_t lastSampleMs = 0; // 上次采样重量时间
 
-// 当前真实重量值
+// 当前重量缓存（供 OLED 显示、告警判断、云上报复用）
 static int32_t currentWeight = 0;
 
 void setup()
 {
-  Serial.begin(115200); // 初始化串口通信，方便调试输出
+  Serial.begin(115200);
 
-  // 第1步：初始化 OLED 显示 (0-20%)
-  setupOLED();  // 内部已显示 0% 进度
+  // 1) OLED 初始化，并显示开机进度框架
+  setupOLED();
 
-  // 第2步：初始化 HX711 称重传感器 (20-40%)
+  // 2) HX711 初始化与校准参数设置（20%~40%）
   showBootProgress(20, "HX711 Sensor");
   setupHX711();
-  delay(100); // 短暂延时让进度可见
+  delay(100);
 
   showBootProgress(30, "Calibration");
   setCalibrationFactor(HX711_CAL_FACTOR);
   delay(100);
 
-  // 第3步：连接 WiFi 网络 (40-70%)
+  // 3) WiFi 连接（40%~70%）
   showBootProgress(40, "WiFi Connecting");
   setupWiFi();
-  // WiFi连接需要一些时间，显示动态进度
+
+  // WiFi 连接通常需要数秒，这里用进度动画提升可视反馈
   uint8_t wifiProgress = 40;
   while (WiFi.status() != WL_CONNECTED && wifiProgress < 65)
   {
@@ -63,12 +62,13 @@ void setup()
   }
   delay(200);
 
-  // 第4步：设置警示灯引脚 (70-80%)
+  // 4) 告警灯 GPIO 初始化（70%~80%）
   showBootProgress(80, "Warning Light");
   pinMode(Warnlight, OUTPUT);
   delay(100);
 
-  // 第5步：初始化 OneNET MQTT (80-100%)
+  // 5) OneNET MQTT 初始化（80%~100%）
+  // 注意：这里只做配置，真实连接在 loop() 内由 oneNetMqttLoop 自动完成。
   showBootProgress(85, "OneNET MQTT");
   OneNetMqttConfig cfg = {
       "mqtts.heclouds.com",
@@ -85,6 +85,7 @@ void setup()
   showBootProgress(100, "Starting...");
   delay(300);
 
+  // 初始化定时器
   lastReportMs = millis();
   lastSampleMs = millis();
   Serial.println("Setup complete");
@@ -94,19 +95,20 @@ void loop()
 {
   uint32_t now = millis();
 
-  // 维持 MQTT 心跳、接收消息、自动重连。
+  // 维护 MQTT 连接、收发和自动重连
   oneNetMqttLoop();
 
-  // 更新OLED显示（综合信息页面）
+  // 持续刷新 OLED 综合状态页
   updateOLEDDisplay();
 
-  // 每 500ms 读取一次真实重量，供本地显示与告警使用。
+  // 每 500ms 采样一次重量
   if (now - lastSampleMs >= 500)
   {
     lastSampleMs = now;
     currentWeight = (int32_t)getWeight();
     setCurrentWeight(currentWeight);
 
+    // 满载即点亮告警灯
     if (currentWeight >= FULL_WEIGHT)
     {
       digitalWrite(Warnlight, HIGH);
@@ -117,18 +119,18 @@ void loop()
     }
   }
 
-  // 每 10 秒上报一次属性。
+  // 每 10 秒上报一次属性（仅在 MQTT 已连接时执行）
   if (oneNetMqttConnected() && now - lastReportMs >= 10000)
   {
     lastReportMs = now;
 
-    // 业务规则：重量 >= FULL_WEIGHT 认为仓格已满
+    // 业务规则：达到阈值即判定满载
     bool isFull = (currentWeight >= FULL_WEIGHT);
 
-    // 设置上传状态为true，触发上传动画
+    // OLED 上传状态置为 active
     setUploadingStatus(true);
 
-    // 按 OneJSON 物模型格式上报 isFull 与 weight
+    // 上传物模型属性：isFull + weight
     oneNetMqttUploadProperties(isFull, currentWeight);
   }
 }
