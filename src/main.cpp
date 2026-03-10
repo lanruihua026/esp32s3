@@ -11,11 +11,11 @@
 
 // ===== ESP32-CAM -> ESP32-S3 串口参数 =====
 // 接线说明：
-// 1) ESP32-CAM TX -> ESP32-S3 RX（本例 RX=16）
-// 2) ESP32-CAM RX <- ESP32-S3 TX（可选，本例 TX=15）
+// 1) ESP32-CAM TX -> ESP32-S3 RX（本例 RX=18）
+// 2) ESP32-CAM RX <- ESP32-S3 TX（可选，本例 TX=17）
 // 3) 两块板必须共地（GND 对 GND）
-static const int CAM_UART_RX_PIN = 16;
-static const int CAM_UART_TX_PIN = 15;
+static const int CAM_UART_RX_PIN = 18;
+static const int CAM_UART_TX_PIN = 17;
 static const uint32_t CAM_UART_BAUD = 115200;
 
 // 串口对象：用于接收 ESP32-CAM 输出的识别结果。
