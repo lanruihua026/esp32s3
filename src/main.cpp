@@ -6,7 +6,7 @@
 
 // ===== 业务参数 =====
 #define Warnlight 6             // 告警灯 GPIO
-#define FULL_WEIGHT 400         // 满载阈值
+#define FULL_WEIGHT 5000        // 满载阈值（g）
 #define HX711_CAL_FACTOR 449.1f // HX711 校准因子（raw/g）：以216g砝码校准（原始值1000×97/216≈449.1）
 
 // ===== ESP32-CAM -> ESP32-S3 串口参数 =====

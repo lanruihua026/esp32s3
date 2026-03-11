@@ -50,7 +50,7 @@ static void showCombinedPage()
     oledDisplay.setCursor(0, 0);
     oledDisplay.println("====== STATUS ======");
 
-    oledDisplay.setCursor(0, 12);
+    oledDisplay.setCursor(0, 11);
     if (WiFi.status() == WL_CONNECTED)
     {
         oledDisplay.print("WiFi: ");
@@ -67,13 +67,26 @@ static void showCombinedPage()
         oledDisplay.setTextColor(SSD1306_WHITE);
     }
 
-    oledDisplay.setCursor(0, 24);
+    // 计算重量百分比（满载5000g）
+    float loadPct = (currentWeight * 100.0f) / 5000.0f;
+    if (loadPct < 0.0f)
+        loadPct = 0.0f;
+    if (loadPct > 100.0f)
+        loadPct = 100.0f;
+
+    oledDisplay.setCursor(0, 22);
     oledDisplay.print("Weight: ");
     oledDisplay.print(currentWeight);
     oledDisplay.println(" g");
 
-    oledDisplay.setCursor(0, 36);
-    if (currentWeight >= 400)
+    // 显示负载百分比
+    char pctBuf[20];
+    snprintf(pctBuf, sizeof(pctBuf), "Load:  %.1f%%", loadPct);
+    oledDisplay.setCursor(0, 33);
+    oledDisplay.println(pctBuf);
+
+    oledDisplay.setCursor(0, 44);
+    if (currentWeight >= 5000)
     {
         // 超阈值反显提示
         oledDisplay.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
@@ -86,7 +99,7 @@ static void showCombinedPage()
     }
     oledDisplay.setTextColor(SSD1306_WHITE);
 
-    oledDisplay.setCursor(0, 48);
+    oledDisplay.setCursor(0, 55);
     if (WiFi.status() == WL_CONNECTED)
     {
         if (uploadingActive)
