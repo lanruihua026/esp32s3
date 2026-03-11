@@ -1,0 +1,170 @@
+{
+  "version": "1.0",
+  "profile": {
+    "industryId": "2",
+    "sceneId": "27",
+    "categoryId": "192",
+    "productId": "f45hkc7xC7"
+  },
+  "properties": [
+    {
+      "identifier": "phone_weight",
+      "name": "手机仓当前重量",
+      "functionType": "u",
+      "accessMode": "r",
+      "desc": "手机仓当前重量，最大5000g",
+      "dataType": {
+        "type": "int32",
+        "specs": {
+          "max": "5000",
+          "min": "0",
+          "step": "1",
+          "unit": "g"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    },
+    {
+      "identifier": "phone_percent",
+      "name": "手机仓满溢百分比",
+      "functionType": "u",
+      "accessMode": "r",
+      "desc": "手机仓当前重量占最大容量的百分比",
+      "dataType": {
+        "type": "float",
+        "specs": {
+          "max": "100",
+          "min": "0",
+          "step": "0.01",
+          "unit": "%"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    },
+    {
+      "identifier": "phone_full",
+      "name": "手机仓满溢状态",
+      "functionType": "u",
+      "accessMode": "r",
+      "desc": "手机仓是否已满溢",
+      "dataType": {
+        "type": "bool",
+        "specs": {
+          "true": "已满",
+          "false": "正常"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    },
+    {
+      "identifier": "mouse_weight",
+      "name": "鼠标仓当前重量",
+      "functionType": "u",
+      "accessMode": "r",
+      "desc": "鼠标仓当前重量，最大5000g",
+      "dataType": {
+        "type": "int32",
+        "specs": {
+          "max": "5000",
+          "min": "0",
+          "step": "1",
+          "unit": "g"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    },
+    {
+      "identifier": "mouse_percent",
+      "name": "鼠标仓满溢百分比",
+      "functionType": "u",
+      "accessMode": "r",
+      "desc": "鼠标仓当前重量占最大容量的百分比",
+      "dataType": {
+        "type": "float",
+        "specs": {
+          "max": "100",
+          "min": "0",
+          "step": "0.01",
+          "unit": "%"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    },
+    {
+      "identifier": "mouse_full",
+      "name": "鼠标仓满溢状态",
+      "functionType": "u",
+      "accessMode": "r",
+      "desc": "鼠标仓是否已满溢",
+      "dataType": {
+        "type": "bool",
+        "specs": {
+          "true": "已满",
+          "false": "正常"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    },
+    {
+      "identifier": "battery_weight",
+      "name": "电池仓当前重量",
+      "functionType": "u",
+      "accessMode": "r",
+      "desc": "电池仓当前重量，最大5000g",
+      "dataType": {
+        "type": "int32",
+        "specs": {
+          "max": "5000",
+          "min": "0",
+          "step": "1",
+          "unit": "g"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    },
+    {
+      "identifier": "battery_percent",
+      "name": "电池仓满溢百分比",
+      "functionType": "u",
+      "accessMode": "r",
+      "desc": "电池仓当前重量占最大容量的百分比",
+      "dataType": {
+        "type": "float",
+        "specs": {
+          "max": "100",
+          "min": "0",
+          "step": "0.01",
+          "unit": "%"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    },
+    {
+      "identifier": "battery_full",
+      "name": "电池仓满溢状态",
+      "functionType": "u",
+      "accessMode": "r",
+      "desc": "电池仓是否已满溢",
+      "dataType": {
+        "type": "bool",
+        "specs": {
+          "true": "已满",
+          "false": "正常"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    }
+  ],
+  "events": [],
+  "services": [],
+  "combs": []
+}

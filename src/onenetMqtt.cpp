@@ -134,6 +134,8 @@ void oneNetMqttBegin(const OneNetMqttConfig &config)
 
     gMqttClient.setServer(gConfig.host, gConfig.port);
     gMqttClient.setCallback(mqttCallback);
+    // 扩大发送缓冲区，9 个属性的 payload 约 380 字节，默认 256 不够
+    gMqttClient.setBufferSize(512);
 
     gInited = true;
 }
@@ -160,7 +162,10 @@ bool oneNetMqttConnected()
     return gMqttClient.connected();
 }
 
-bool oneNetMqttUploadProperties(bool isFull, int32_t weight)
+bool oneNetMqttUploadProperties(
+    const BoxBinData &phone,
+    const BoxBinData &mouse,
+    const BoxBinData &battery)
 {
     if (!gMqttClient.connected())
     {
@@ -169,25 +174,34 @@ bool oneNetMqttUploadProperties(bool isFull, int32_t weight)
 
     String msgId = buildMessageId();
 
-    // OneJSON 属性上报载荷
-    // {
-    //   "id":"xxx",
-    //   "version":"1.0",
-    //   "params":{
-    //      "isFull":{"value":true/false},
-    //      "weight":{"value":123}
-    //   }
-    // }
-    String payload;
-    payload.reserve(256);
-    payload += "{\"id\":\"" + msgId + "\",\"version\":\"1.0\",\"params\":{";
-    payload += "\"isFull\":{\"value\":";
-    payload += (isFull ? "true" : "false");
-    payload += "},";
-    payload += "\"weight\":{\"value\":" + String(weight) + "}";
-    payload += "}}";
+    // float 格式化为字符串（dtostrf 是 AVR/ESP32 标准函数）
+    char phonePct[10], mousePct[10], batteryPct[10];
+    dtostrf(phone.percent,   1, 2, phonePct);
+    dtostrf(mouse.percent,   1, 2, mousePct);
+    dtostrf(battery.percent, 1, 2, batteryPct);
 
-    bool ok = gMqttClient.publish(gPropertyPostTopic.c_str(), payload.c_str(), false);
+    // OneJSON 属性上报载荷，包含全部 9 个物模型属性
+    // payload 最大约 380 字节，缓冲区 512 足够
+    char payload[512];
+    snprintf(payload, sizeof(payload),
+        "{\"id\":\"%s\",\"version\":\"1.0\",\"params\":{"
+        "\"phone_weight\":{\"value\":%d},"
+        "\"phone_percent\":{\"value\":%s},"
+        "\"phone_full\":{\"value\":%s},"
+        "\"mouse_weight\":{\"value\":%d},"
+        "\"mouse_percent\":{\"value\":%s},"
+        "\"mouse_full\":{\"value\":%s},"
+        "\"battery_weight\":{\"value\":%d},"
+        "\"battery_percent\":{\"value\":%s},"
+        "\"battery_full\":{\"value\":%s}"
+        "}}",
+        msgId.c_str(),
+        phone.weight,   phonePct,   phone.full   ? "true" : "false",
+        mouse.weight,   mousePct,   mouse.full   ? "true" : "false",
+        battery.weight, batteryPct, battery.full ? "true" : "false"
+    );
+
+    bool ok = gMqttClient.publish(gPropertyPostTopic.c_str(), payload, false);
     if (ok)
     {
         Serial.print("[OneNET] property post: ");

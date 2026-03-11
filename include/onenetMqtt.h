@@ -51,10 +51,29 @@ void oneNetMqttLoop();
 bool oneNetMqttConnected();
 
 /**
- * @brief 以 OneJSON 属性上报格式发布数据
- * @param isFull 业务属性：是否满载
- * @param weight 业务属性：当前重量
+ * @brief 单个仓格的物模型数据
+ *
+ * 字段说明：
+ * - weight:  当前重量（g），对应物模型 *_weight，范围 0~5000
+ * - percent: 满溢百分比（%），对应物模型 *_percent，范围 0.00~100.00
+ * - full:    是否满溢，对应物模型 *_full
  */
-bool oneNetMqttUploadProperties(bool isFull, int32_t weight);
+struct BoxBinData {
+    int32_t weight;  // 当前重量 (g)
+    float   percent; // 满溢百分比 (%)
+    bool    full;    // 是否满溢
+};
+
+/**
+ * @brief 以 OneJSON 属性上报格式发布三仓数据（共 9 个属性）
+ * @param phone   手机仓数据
+ * @param mouse   鼠标仓数据
+ * @param battery 电池仓数据
+ */
+bool oneNetMqttUploadProperties(
+    const BoxBinData &phone,
+    const BoxBinData &mouse,
+    const BoxBinData &battery
+);
 
 #endif

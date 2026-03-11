@@ -67,7 +67,7 @@ static void showCombinedPage()
         oledDisplay.setTextColor(SSD1306_WHITE);
     }
 
-    // 计算重量百分比（满载5000g）
+    // 计算重量百分比（传感器最大量程5000g）
     float loadPct = (currentWeight * 100.0f) / 5000.0f;
     if (loadPct < 0.0f)
         loadPct = 0.0f;
@@ -81,12 +81,12 @@ static void showCombinedPage()
 
     // 显示负载百分比
     char pctBuf[20];
-    snprintf(pctBuf, sizeof(pctBuf), "Load:  %.1f%%", loadPct);
+    snprintf(pctBuf, sizeof(pctBuf), "Load:  %.2f%%", loadPct);
     oledDisplay.setCursor(0, 33);
     oledDisplay.println(pctBuf);
 
     oledDisplay.setCursor(0, 44);
-    if (currentWeight >= 5000)
+    if (currentWeight >= 1000)
     {
         // 超阈值反显提示
         oledDisplay.setTextColor(SSD1306_BLACK, SSD1306_WHITE);

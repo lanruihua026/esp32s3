@@ -6,7 +6,7 @@
 
 // ===== 业务参数 =====
 #define Warnlight 6             // 告警灯 GPIO
-#define FULL_WEIGHT 5000        // 满载阈值（g）
+#define FULL_WEIGHT 1000        // 满载阈值（g）
 #define HX711_CAL_FACTOR 449.1f // HX711 校准因子（raw/g）：以216g砝码校准（原始值1000×97/216≈449.1）
 
 // ===== ESP32-CAM -> ESP32-S3 串口参数 =====
@@ -267,14 +267,20 @@ void loop()
   {
     lastReportMs = now;
 
-    // 业务规则：达到阈值即判定满载
+    // 暂时三仓数据源统一为同一个 HX711
+    // 百分比基于传感器量程 5000g，满溢阈值 FULL_WEIGHT 独立判断
+    float pct = (currentWeight * 100.0f) / 5000.0f;
+    if (pct < 0.0f)   pct = 0.0f;
+    if (pct > 100.0f) pct = 100.0f;
     bool isFull = (currentWeight >= FULL_WEIGHT);
+
+    BoxBinData binData = { currentWeight, pct, isFull };
 
     // OLED 上传状态置为 active
     setUploadingStatus(true);
 
-    // 上传物模型属性：isFull + weight
-    oneNetMqttUploadProperties(isFull, currentWeight);
+    // 上传物模型属性：手机仓 / 鼠标仓 / 电池仓（当前同源）
+    oneNetMqttUploadProperties(binData, binData, binData);
 
     // 这里额外输出最近一次 AI 状态，方便你在串口联调时观察。
     if (g_lastAiDetected)
