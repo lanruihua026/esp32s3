@@ -6,6 +6,7 @@ Adafruit_SSD1306 oledDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // ===== 运行态显示所需共享状态 =====
 static bool uploadingActive = false; // 是否正在上传
 static int32_t currentWeight = 0;    // 当前重量（g）
+static int32_t fullWeight = 1000;    // 满载阈值（g），由 main.cpp 通过 setFullWeight() 初始化
 
 // 动画帧计数器（用于 Upload... 点动画）
 static uint8_t animationFrame = 0;
@@ -30,6 +31,12 @@ void setUploadingStatus(bool isUploading)
 void setCurrentWeight(int32_t weight)
 {
     currentWeight = weight;
+}
+
+void setFullWeight(int32_t fw)
+{
+    if (fw > 0)
+        fullWeight = fw;
 }
 
 /**
@@ -67,8 +74,8 @@ static void showCombinedPage()
         oledDisplay.setTextColor(SSD1306_WHITE);
     }
 
-    // 计算重量百分比（传感器最大量程5000g）
-    float loadPct = (currentWeight * 100.0f) / 5000.0f;
+    // 计算重量百分比（以 fullWeight 为 100% 基准）
+    float loadPct = (currentWeight * 100.0f) / fullWeight;
     if (loadPct < 0.0f)
         loadPct = 0.0f;
     if (loadPct > 100.0f)
@@ -86,7 +93,7 @@ static void showCombinedPage()
     oledDisplay.println(pctBuf);
 
     oledDisplay.setCursor(0, 44);
-    if (currentWeight >= 1000)
+    if (currentWeight >= fullWeight)
     {
         // 超阈值反显提示
         oledDisplay.setTextColor(SSD1306_BLACK, SSD1306_WHITE);

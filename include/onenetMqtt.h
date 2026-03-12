@@ -54,14 +54,15 @@ bool oneNetMqttConnected();
  * @brief 单个仓格的物模型数据
  *
  * 字段说明：
- * - weight:  当前重量（g），对应物模型 *_weight，范围 0~5000
+ * - weight:  当前重量（g），对应物模型 *_weight，范围 0~1000（实际满载阈值）
  * - percent: 满溢百分比（%），对应物模型 *_percent，范围 0.00~100.00
  * - full:    是否满溢，对应物模型 *_full
  */
-struct BoxBinData {
-    int32_t weight;  // 当前重量 (g)
-    float   percent; // 满溢百分比 (%)
-    bool    full;    // 是否满溢
+struct BoxBinData
+{
+    int32_t weight; // 当前重量 (g)
+    float percent;  // 满溢百分比 (%)
+    bool full;      // 是否满溢
 };
 
 /**
@@ -73,7 +74,6 @@ struct BoxBinData {
 bool oneNetMqttUploadProperties(
     const BoxBinData &phone,
     const BoxBinData &mouse,
-    const BoxBinData &battery
-);
+    const BoxBinData &battery);
 
 #endif

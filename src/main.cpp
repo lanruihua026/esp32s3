@@ -3,10 +3,12 @@
 #include "hx711.h"
 #include "oledInit.h"
 #include "onenetMqtt.h"
+#include "rgbLed.h"
+#include "buttonControl.h"
 
 // ===== 业务参数 =====
 #define Warnlight 6             // 告警灯 GPIO
-#define FULL_WEIGHT 1000        // 满载阈值（g）
+#define FULL_WEIGHT 1000        // 实际满载阈值（g）：HX711量程5000g，设定最大载重1000g
 #define HX711_CAL_FACTOR 449.1f // HX711 校准因子（raw/g）：以216g砝码校准（原始值1000×97/216≈449.1）
 
 // ===== ESP32-CAM -> ESP32-S3 串口参数 =====
@@ -169,6 +171,7 @@ void setup()
 
   // 1) OLED 初始化，并显示开机进度框架
   setupOLED();
+  setFullWeight(FULL_WEIGHT); // 将满载阈值传入 OLED 模块
 
   // 2) HX711 初始化与校准参数设置（20%~40%）
   showBootProgress(20, "HX711 Sensor");
@@ -203,13 +206,27 @@ void setup()
   delay(200);
 
   // 4) 告警灯 GPIO 初始化（70%~80%）
-  showBootProgress(80, "Warning Light");
+  showBootProgress(78, "Warning Light");
   pinMode(Warnlight, OUTPUT);
   delay(100);
 
-  // 5) OneNET MQTT 初始化（80%~100%）
+  // 5) RGB LED 初始化
+  showBootProgress(82, "RGB LED");
+  setupRgbLed();
+  delay(100);
+
+  // 6) 按键初始化，并注册回调
+  showBootProgress(86, "Buttons");
+  setupButtons();
+  setButton1Callback([]()
+                     { rgbLedOn(); }); // 按键1：点亮 RGB LED
+  setButton2Callback([]()
+                     { rgbLedOff(); }); // 按键2：关闭 RGB LED
+  delay(100);
+
+  // 7) OneNET MQTT 初始化（86%~100%）
   // 注意：这里只做配置，真实连接在 loop() 内由 oneNetMqttLoop 自动完成。
-  showBootProgress(85, "OneNET MQTT");
+  showBootProgress(90, "OneNET MQTT");
   OneNetMqttConfig cfg = {
       "mqtts.heclouds.com",
       1883,
@@ -237,6 +254,9 @@ void loop()
 
   // 先处理来自摄像头的识别串口数据，保证消息不会堆积。
   pollCameraUart();
+
+  // 按键轮询，消抗抙6并下降沿触发回调
+  pollButtons();
 
   // 维护 MQTT 连接、收发和自动重连
   oneNetMqttLoop();
@@ -268,13 +288,15 @@ void loop()
     lastReportMs = now;
 
     // 暂时三仓数据源统一为同一个 HX711
-    // 百分比基于传感器量程 5000g，满溢阈值 FULL_WEIGHT 独立判断
-    float pct = (currentWeight * 100.0f) / 5000.0f;
-    if (pct < 0.0f)   pct = 0.0f;
-    if (pct > 100.0f) pct = 100.0f;
+    // 百分比基于最大满溢重量1000g，满溢阈值 FULL_WEIGHT 独立判断
+    float pct = (currentWeight * 100.0f) / 1000.0f;
+    if (pct < 0.0f)
+      pct = 0.0f;
+    if (pct > 100.0f)
+      pct = 100.0f;
     bool isFull = (currentWeight >= FULL_WEIGHT);
 
-    BoxBinData binData = { currentWeight, pct, isFull };
+    BoxBinData binData = {currentWeight, pct, isFull};
 
     // OLED 上传状态置为 active
     setUploadingStatus(true);

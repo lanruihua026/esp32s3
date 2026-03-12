@@ -17,8 +17,18 @@
 #define SDA_PIN 4
 #define SCL_PIN 5
 
+// ===== 业务阈值 =====
+// HX711 传感器量程 5000g，实际最大载重量设定为 1000g
+#define HX711_SENSOR_MAX 5000 // 传感器量程上限（g）
+
 // 全局 OLED 对象（在 oledInit.cpp 中定义）
 extern Adafruit_SSD1306 oledDisplay;
+
+/**
+ * @brief 设置满载阈值（影响 OLED 百分比计算与满载状态显示）
+ * @param fw 满载重量（g），由 main.cpp 在 setup() 中传入
+ */
+void setFullWeight(int32_t fw);
 
 /**
  * @brief 初始化 OLED 与 I2C
