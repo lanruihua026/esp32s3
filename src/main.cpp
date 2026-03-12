@@ -3,7 +3,6 @@
 #include "hx711.h"
 #include "oledInit.h"
 #include "onenetMqtt.h"
-#include "rgbLed.h"
 #include "buttonControl.h"
 
 // ===== 业务参数 =====
@@ -92,6 +91,9 @@ void parseCameraLine(const char *line)
     g_lastAiDetected = true;
     g_lastAiUpdateMs = millis();
 
+    // 同步更新 OLED 模块的 AI 识别结果缓存
+    setAiResult(true, g_lastAiLabel, g_lastAiConf, g_lastAiUpdateMs);
+
     Serial.printf("[CAM-UART] DET label=%s conf=%.3f\n", g_lastAiLabel, g_lastAiConf);
     return;
   }
@@ -105,6 +107,9 @@ void parseCameraLine(const char *line)
     g_lastAiConf = 0.0f;
     g_lastAiUpdateMs = millis();
 
+    // 同步更新 OLED 缓存
+    setAiResult(false, "none", 0.0f, g_lastAiUpdateMs);
+
     Serial.println("[CAM-UART] NONE");
     return;
   }
@@ -114,6 +119,10 @@ void parseCameraLine(const char *line)
   {
     g_lastAiDetected = false;
     g_lastAiUpdateMs = millis();
+
+    // 异常时也更新 OLED 缓存
+    setAiResult(false, "ERR", 0.0f, g_lastAiUpdateMs);
+
     Serial.printf("[CAM-UART] %s\n", line);
     return;
   }
@@ -210,18 +219,13 @@ void setup()
   pinMode(Warnlight, OUTPUT);
   delay(100);
 
-  // 5) RGB LED 初始化
-  showBootProgress(82, "RGB LED");
-  setupRgbLed();
-  delay(100);
-
-  // 6) 按键初始化，并注册回调
+  // 5) 按键初始化，并注册回调
   showBootProgress(86, "Buttons");
   setupButtons();
   setButton1Callback([]()
-                     { rgbLedOn(); }); // 按键1：点亮 RGB LED
+                     { setOledPage(1); }); // 按键1：切换到 AI 识别结果页
   setButton2Callback([]()
-                     { rgbLedOff(); }); // 按键2：关闭 RGB LED
+                     { setOledPage(0); }); // 按键2：切换到综合信息页
   delay(100);
 
   // 7) OneNET MQTT 初始化（86%~100%）
@@ -305,13 +309,13 @@ void loop()
     oneNetMqttUploadProperties(binData, binData, binData);
 
     // 这里额外输出最近一次 AI 状态，方便你在串口联调时观察。
-    if (g_lastAiDetected)
-    {
-      Serial.printf("[AI-STATE] label=%s conf=%.3f age=%lums\n", g_lastAiLabel, g_lastAiConf, (unsigned long)(now - g_lastAiUpdateMs));
-    }
-    else
-    {
-      Serial.printf("[AI-STATE] none age=%lums\n", (unsigned long)(now - g_lastAiUpdateMs));
-    }
+    // if (g_lastAiDetected)
+    // {
+    //   Serial.printf("[AI-STATE] label=%s conf=%.3f age=%lums\n", g_lastAiLabel, g_lastAiConf, (unsigned long)(now - g_lastAiUpdateMs));
+    // }
+    // else
+    // {
+    //   Serial.printf("[AI-STATE] none age=%lums\n", (unsigned long)(now - g_lastAiUpdateMs));
+    // }
   }
 }

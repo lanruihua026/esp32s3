@@ -57,8 +57,21 @@ void setUploadingStatus(bool isUploading);
  */
 void setCurrentWeight(int32_t weight);
 
+/** * @brief 更新 ESP32-CAM 最新 AI 识别结果（供 AI 结果页显示）
+ * @param detected  是否识别到目标
+ * @param label     识别标签（字符串，最多 31 字符）
+ * @param conf      置信度（0.0~1.0）
+ * @param updateMs  本次识别时的 millis() 时间戳
+ */
+void setAiResult(bool detected, const char *label, float conf, uint32_t updateMs);
+
 /**
- * @brief 显示开机进度条页面
+ * @brief 切换 OLED 当前显示页面
+ * @param page  0 = 综合信息页，1 = AI 识别结果页
+ */
+void setOledPage(uint8_t page);
+
+/** * @brief 显示开机进度条页面
  * @param progress 进度百分比（0~100）
  * @param statusText 当前阶段文本
  */

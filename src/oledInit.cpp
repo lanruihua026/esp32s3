@@ -13,6 +13,16 @@ static uint8_t animationFrame = 0;
 static uint32_t lastAnimationMs = 0;
 #define ANIMATION_INTERVAL 300 // 动画刷新周期（ms）
 
+// ===== OLED 页面管理 =====
+// 0 = 综合信息页；1 = AI 识别结果页
+static uint8_t g_oledPage = 0;
+
+// ===== AI 识别结果缓存 =====
+static bool g_aiDetected = false;
+static char g_aiLabel[32] = "none";
+static float g_aiConf = 0.0f;
+static uint32_t g_aiUpdateMs = 0;
+
 /**
  * @brief 设置上传状态
  * @param isUploading true 表示正在上传，false 表示空闲
@@ -37,6 +47,96 @@ void setFullWeight(int32_t fw)
 {
     if (fw > 0)
         fullWeight = fw;
+}
+
+void setAiResult(bool detected, const char *label, float conf, uint32_t updateMs)
+{
+    g_aiDetected = detected;
+    if (label)
+    {
+        strncpy(g_aiLabel, label, sizeof(g_aiLabel) - 1);
+        g_aiLabel[sizeof(g_aiLabel) - 1] = '\0';
+    }
+    g_aiConf = conf;
+    g_aiUpdateMs = updateMs;
+}
+
+void setOledPage(uint8_t page)
+{
+    g_oledPage = page;
+}
+
+/**
+ * @brief 显示 AI 识别结果页
+ *
+ * 页面内容：
+ * 1. 页面标题
+ * 2. 识别状态（Detected / No Target）
+ * 3. 识别标签
+ * 4. 置信度
+ * 5. 上次更新距今时间
+ */
+static void showAiResultPage()
+{
+    oledDisplay.clearDisplay();
+    oledDisplay.setTextSize(1);
+    oledDisplay.setTextColor(SSD1306_WHITE);
+
+    // 标题行
+    oledDisplay.setCursor(0, 0);
+    oledDisplay.println("==== AI Result ====");
+
+    if (g_aiDetected)
+    {
+        // 反显 Detected 状态，醒目显示识别成功
+        oledDisplay.setCursor(0, 11);
+        oledDisplay.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+        oledDisplay.println(" Status: Detected ");
+        oledDisplay.setTextColor(SSD1306_WHITE);
+
+        // 识别标签（最多显示 20 个字符）
+        char labelBuf[21];
+        strncpy(labelBuf, g_aiLabel, 20);
+        labelBuf[20] = '\0';
+        oledDisplay.setCursor(0, 23);
+        oledDisplay.print("Label: ");
+        oledDisplay.println(labelBuf);
+
+        // 置信度
+        char confBuf[20];
+        snprintf(confBuf, sizeof(confBuf), "Conf:  %.1f%%", g_aiConf * 100.0f);
+        oledDisplay.setCursor(0, 34);
+        oledDisplay.println(confBuf);
+    }
+    else
+    {
+        oledDisplay.setCursor(0, 11);
+        oledDisplay.println("Status: No Target");
+        oledDisplay.setCursor(0, 23);
+        oledDisplay.println("Label: --");
+        oledDisplay.setCursor(0, 34);
+        oledDisplay.println("Conf:  --");
+    }
+
+    // 上次更新距今时间
+    oledDisplay.setCursor(0, 45);
+    if (g_aiUpdateMs == 0)
+    {
+        oledDisplay.println("No data yet");
+    }
+    else
+    {
+        uint32_t ageSec = (millis() - g_aiUpdateMs) / 1000;
+        char ageBuf[24];
+        snprintf(ageBuf, sizeof(ageBuf), "Updated: %lus ago", (unsigned long)ageSec);
+        oledDisplay.println(ageBuf);
+    }
+
+    // 底部提示当前页
+    oledDisplay.setCursor(0, 56);
+    oledDisplay.println("[Btn2: Info Page]");
+
+    oledDisplay.display();
 }
 
 /**
@@ -106,6 +206,20 @@ static void showCombinedPage()
     }
     oledDisplay.setTextColor(SSD1306_WHITE);
 
+    oledDisplay.setCursor(0, 44);
+    if (currentWeight >= fullWeight)
+    {
+        // 超阈值反显提示
+        oledDisplay.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+        oledDisplay.println("  Status: FULL   ");
+    }
+    else
+    {
+        oledDisplay.setTextColor(SSD1306_WHITE);
+        oledDisplay.println("Status: Normal");
+    }
+    oledDisplay.setTextColor(SSD1306_WHITE);
+
     oledDisplay.setCursor(0, 55);
     if (WiFi.status() == WL_CONNECTED)
     {
@@ -143,7 +257,15 @@ void updateOLEDDisplay()
         animationFrame++;
     }
 
-    showCombinedPage();
+    // 根据当前选中页面分支显示
+    if (g_oledPage == 1)
+    {
+        showAiResultPage();
+    }
+    else
+    {
+        showCombinedPage();
+    }
 }
 
 void showBootProgress(uint8_t progress, const char *statusText)

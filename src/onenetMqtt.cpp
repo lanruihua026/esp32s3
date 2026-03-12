@@ -1,5 +1,4 @@
 ﻿#include "onenetMqtt.h"
-
 #include <PubSubClient.h>
 #include <WiFi.h>
 
@@ -63,10 +62,10 @@ namespace
             msg += static_cast<char>(payload[i]);
         }
 
-        Serial.print("[OneNET] topic: ");
-        Serial.println(topic);
-        Serial.print("[OneNET] payload: ");
-        Serial.println(msg);
+        // Serial.print("[OneNET] topic: ");
+        // Serial.println(topic);
+        // Serial.print("[OneNET] payload: ");
+        // Serial.println(msg);
     }
 
     /**
@@ -102,20 +101,20 @@ namespace
 
         if (token.isEmpty())
         {
-            Serial.println("[OneNET] token generate failed");
+            // Serial.println("[OneNET] token generate failed");
             return;
         }
 
-        Serial.println("[OneNET] MQTT connecting...");
+        // Serial.println("[OneNET] MQTT connecting...");
         bool ok = gMqttClient.connect(gConfig.deviceName, gConfig.productId, token.c_str());
         if (!ok)
         {
-            Serial.print("[OneNET] MQTT connect failed, rc=");
-            Serial.println(gMqttClient.state());
+            // Serial.print("[OneNET] MQTT connect failed, rc=");
+            // Serial.println(gMqttClient.state());
             return;
         }
 
-        Serial.println("[OneNET] MQTT connected");
+        // Serial.println("[OneNET] MQTT connected");
 
         // 订阅平台应答与属性下发主题
         gMqttClient.subscribe(gPropertyPostReplyTopic.c_str(), 0);
@@ -176,40 +175,39 @@ bool oneNetMqttUploadProperties(
 
     // float 格式化为字符串（dtostrf 是 AVR/ESP32 标准函数）
     char phonePct[10], mousePct[10], batteryPct[10];
-    dtostrf(phone.percent,   1, 2, phonePct);
-    dtostrf(mouse.percent,   1, 2, mousePct);
+    dtostrf(phone.percent, 1, 2, phonePct);
+    dtostrf(mouse.percent, 1, 2, mousePct);
     dtostrf(battery.percent, 1, 2, batteryPct);
 
     // OneJSON 属性上报载荷，包含全部 9 个物模型属性
     // payload 最大约 380 字节，缓冲区 512 足够
     char payload[512];
     snprintf(payload, sizeof(payload),
-        "{\"id\":\"%s\",\"version\":\"1.0\",\"params\":{"
-        "\"phone_weight\":{\"value\":%d},"
-        "\"phone_percent\":{\"value\":%s},"
-        "\"phone_full\":{\"value\":%s},"
-        "\"mouse_weight\":{\"value\":%d},"
-        "\"mouse_percent\":{\"value\":%s},"
-        "\"mouse_full\":{\"value\":%s},"
-        "\"battery_weight\":{\"value\":%d},"
-        "\"battery_percent\":{\"value\":%s},"
-        "\"battery_full\":{\"value\":%s}"
-        "}}",
-        msgId.c_str(),
-        phone.weight,   phonePct,   phone.full   ? "true" : "false",
-        mouse.weight,   mousePct,   mouse.full   ? "true" : "false",
-        battery.weight, batteryPct, battery.full ? "true" : "false"
-    );
+             "{\"id\":\"%s\",\"version\":\"1.0\",\"params\":{"
+             "\"phone_weight\":{\"value\":%d},"
+             "\"phone_percent\":{\"value\":%s},"
+             "\"phone_full\":{\"value\":%s},"
+             "\"mouse_weight\":{\"value\":%d},"
+             "\"mouse_percent\":{\"value\":%s},"
+             "\"mouse_full\":{\"value\":%s},"
+             "\"battery_weight\":{\"value\":%d},"
+             "\"battery_percent\":{\"value\":%s},"
+             "\"battery_full\":{\"value\":%s}"
+             "}}",
+             msgId.c_str(),
+             phone.weight, phonePct, phone.full ? "true" : "false",
+             mouse.weight, mousePct, mouse.full ? "true" : "false",
+             battery.weight, batteryPct, battery.full ? "true" : "false");
 
     bool ok = gMqttClient.publish(gPropertyPostTopic.c_str(), payload, false);
-    if (ok)
-    {
-        Serial.print("[OneNET] property post: ");
-        Serial.println(payload);
-    }
-    else
-    {
-        Serial.println("[OneNET] property post failed");
-    }
+    // if (ok)
+    // {
+    //     Serial.print("[OneNET] property post: ");
+    //     Serial.println(payload);
+    // }
+    // else
+    // {
+    //     Serial.println("[OneNET] property post failed");
+    // }
     return ok;
 }
