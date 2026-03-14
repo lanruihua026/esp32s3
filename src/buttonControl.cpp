@@ -14,18 +14,39 @@ static volatile uint32_t g_btn2IsrMs = 0;
 
 // ===== 中断服务程序（IRAM_ATTR：存放在 IRAM，保证执行速度）=====
 // 只做最轻量的操作：记录时间戳 + 置位标志，不调用任何库函数。
+
+/**
+ * @brief 按键 1 中断服务程序（下降沿触发）
+ *
+ * 说明：仅记录触发时间戳并置位 pending 标志，
+ * 消抖和回调调用由 pollButtons() 在主循环中处理。
+ */
 static void IRAM_ATTR btn1ISR()
 {
     g_btn1IsrMs = millis(); // ESP32 的 millis() 在 ISR 中安全可用
     g_btn1Pending = true;
 }
 
+/**
+ * @brief 按键 2 中断服务程序（下降沿触发）
+ *
+ * 说明：仅记录触发时间戳并置位 pending 标志，
+ * 消抖和回调调用由 pollButtons() 在主循环中处理。
+ */
 static void IRAM_ATTR btn2ISR()
 {
     g_btn2IsrMs = millis();
     g_btn2Pending = true;
 }
 
+/**
+ * @brief 初始化按键引脚并绑定中断
+ *
+ * 说明：
+ * 1. 将 BTN1_PIN、BTN2_PIN 配置为内部上拉输入。
+ * 2. 绑定下降沿中断（按键按下 → GPIO 由 HIGH 变 LOW）。
+ * 3. 使用中断 + 主循环消抖的混合方案，既响应灵敏又避免抖动误触。
+ */
 void setupButtons()
 {
     pinMode(BTN1_PIN, INPUT_PULLUP);
@@ -39,9 +60,26 @@ void setupButtons()
                   BTN1_PIN, BTN2_PIN);
 }
 
+/**
+ * @brief 注册按键 1 的回调函数
+ * @param cb 回调函数指针；传 nullptr 可清除已有回调
+ */
 void setButton1Callback(ButtonCallback cb) { g_btn1Cb = cb; }
+
+/**
+ * @brief 注册按键 2 的回调函数
+ * @param cb 回调函数指针；传 nullptr 可清除已有回调
+ */
 void setButton2Callback(ButtonCallback cb) { g_btn2Cb = cb; }
 
+/**
+ * @brief 在主循环中轮询按键状态并执行消抖回调（在 loop() 中持续调用）
+ *
+ * 说明：
+ * 1. 检查 ISR 置位的 pending 标志。
+ * 2. 距 ISR 触发时间超过 BTN_DEBOUNCE_MS 后，确认为有效按下并执行回调。
+ * 3. 本函数无阻塞，不影响主循环帧率。
+ */
 void pollButtons()
 {
     uint32_t now = millis();

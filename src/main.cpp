@@ -170,13 +170,25 @@ void pollCameraUart()
   }
 }
 
+/**
+ * @brief Arduino 初始化入口，系统上电后执行一次
+ *
+ * 初始化顺序：
+ * 1. Serial / CameraUart 串口
+ * 2. OLED 显示屏（含启动进度动画）
+ * 3. HX711 传感器及校准因子设置
+ * 4. WiFi 连接（带进度推进动画）
+ * 5. 告警灯 GPIO
+ * 6. 按键中断及页面切换回调
+ * 7. OneNET MQTT 配置（实际连接延后到 loop()）
+ */
 void setup()
 {
   Serial.begin(115200);
 
   // 初始化来自 ESP32-CAM 的串口通道。
   CameraUart.begin(CAM_UART_BAUD, SERIAL_8N1, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
-  Serial.printf("[CAM-UART] Init done, baud=%u RX=%d TX=%d\n", CAM_UART_BAUD, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
+  // Serial.printf("[CAM-UART] Init done, baud=%u RX=%d TX=%d\n", CAM_UART_BAUD, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
 
   // 1) OLED 初始化，并显示开机进度框架
   setupOLED();
@@ -252,6 +264,17 @@ void setup()
   Serial.println("Setup complete");
 }
 
+/**
+ * @brief Arduino 主循环，持续执行
+ *
+ * 每帧执行顺序：
+ * 1. pollCameraUart()   — 接收并解析 ESP32-CAM 串口数据
+ * 2. pollButtons()      — 消抖处理按键并触发回调
+ * 3. oneNetMqttLoop()   — 维护 MQTT 连接、保活与自动重连
+ * 4. updateOLEDDisplay() — 刷新 OLED 当前页面
+ * 5. 每 500ms 采样一次重量，更新告警灯
+ * 6. 每 10s 向 OneNET 上报一次物模型属性（仅 MQTT 已连接时）
+ */
 void loop()
 {
   uint32_t now = millis();

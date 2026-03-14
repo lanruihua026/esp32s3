@@ -115,6 +115,12 @@ namespace
     }
 }
 
+/**
+ * @brief 将签名算法枚举转换为 OneNET token 所需的字符串表示
+ * @param method 签名算法枚举值（MD5 / SHA1 / SHA256）
+ * @return 对应的小写算法名称字符串（"md5" / "sha1" / "sha256"）；
+ *         未知值默认返回 "sha256"
+ */
 String oneNetSignMethodToString(OneNetSignMethod method)
 {
     switch (method)
@@ -129,6 +135,23 @@ String oneNetSignMethodToString(OneNetSignMethod method)
     }
 }
 
+/**
+ * @brief 生成符合 OneNET 鉴权规范的 token 字符串
+ * @param base64Key      Base64 编码的设备密钥
+ * @param resource       资源串，格式为 "products/<pid>/devices/<dname>"
+ * @param expirationTime Token 过期时间（Unix 时间戳，秒）
+ * @param method         签名算法（MD5 / SHA1 / SHA256）
+ * @param version        协议版本字符串（如 "2018-10-31"）
+ * @return 组装好的 token 字符串；参数非法或签名失败时返回空字符串
+ *
+ * 说明：
+ * 签名流程：
+ * 1. Base64 解码密钥；
+ * 2. 按固定顺序拼接 StringForSignature（et\\nmethod\\nres\\nversion）；
+ * 3. 使用 mbedTLS HMAC 计算摘要；
+ * 4. 将摘要再 Base64 编码得到 sign；
+ * 5. 对各字段值做 URL 编码后拼接为最终 token。
+ */
 String generateOneNetToken(
     const String &base64Key,
     const String &resource,

@@ -43,12 +43,26 @@ void setCurrentWeight(int32_t weight)
     currentWeight = weight;
 }
 
+/**
+ * @brief 设置满载阈值
+ * @param fw 满载重量（单位：克，必须 > 0，否则忽略）
+ * 说明：该值作为重量百分比和满溢判断的基准，由 main.cpp 在初始化阶段传入。
+ */
 void setFullWeight(int32_t fw)
 {
     if (fw > 0)
         fullWeight = fw;
 }
 
+/**
+ * @brief 更新 AI 识别结果缓存
+ * @param detected   是否检测到目标
+ * @param label      识别标签字符串（nullptr 时跳过赋值）
+ * @param conf       置信度（0.0~1.0）
+ * @param updateMs   本次更新的时间戳（millis()）
+ * 说明：由 main.cpp 的 parseCameraLine() 在收到 CAM 消息后调用，
+ * 将最新识别结果同步给 OLED AI 结果页。
+ */
 void setAiResult(bool detected, const char *label, float conf, uint32_t updateMs)
 {
     g_aiDetected = detected;
@@ -61,6 +75,11 @@ void setAiResult(bool detected, const char *label, float conf, uint32_t updateMs
     g_aiUpdateMs = updateMs;
 }
 
+/**
+ * @brief 切换 OLED 显示页面
+ * @param page 目标页面编号（0 = 综合信息页；1 = AI 识别结果页）
+ * 说明：由按键回调在 main.cpp 中调用，实现页面切换。
+ */
 void setOledPage(uint8_t page)
 {
     g_oledPage = page;
@@ -246,6 +265,14 @@ static void showCombinedPage()
     oledDisplay.display();
 }
 
+/**
+ * @brief 刷新 OLED 显示内容（在 loop() 中持续调用）
+ *
+ * 说明：
+ * 1. 按固定周期（ANIMATION_INTERVAL）推进上传动画帧计数。
+ * 2. 根据 g_oledPage 分支调用对应页面的绘制函数。
+ * 3. 本函数无阻塞，适合在主循环每帧调用。
+ */
 void updateOLEDDisplay()
 {
     uint32_t now = millis();
@@ -267,7 +294,13 @@ void updateOLEDDisplay()
         showCombinedPage();
     }
 }
-
+/**
+ * @brief 显示系统启动进度
+ * @param progress 进度百分比（0~100）
+ * @param statusText 当前阶段状态文本（如 "WiFi Connecting"）
+ * 说明：这个函数在 setup() 中被调用，展示系统启动的各个阶段，提升用户体验和调试便利性。
+ 进度条设计为 10%~100%，每个阶段占约 10%~20%，具体分配可根据实际启动流程调整。
+ */
 void showBootProgress(uint8_t progress, const char *statusText)
 {
     const uint8_t barX = 10;
@@ -310,6 +343,14 @@ void showBootProgress(uint8_t progress, const char *statusText)
     oledDisplay.display();
 }
 
+/**
+ * @brief 初始化 OLED 显示屏
+ *
+ * 说明：
+ * 1. 以 400kHz 启动 I2C 总线（SDA/SCL 引脚由 oledInit.h 宏定义）。
+ * 2. 初始化 SSD1306 控制器；失败则打印错误并进入死循环，防止后续状态不可见。
+ * 3. 初始化成功后立即显示第一帧启动进度（0%），并启动动画计时。
+ */
 void setupOLED()
 {
     // 指定 I2C 引脚与总线速率（400kHz）

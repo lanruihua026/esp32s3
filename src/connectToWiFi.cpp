@@ -1,6 +1,15 @@
 ﻿#include "connectToWiFi.h"
 #include "oledInit.h"
 
+/**
+ * @brief 初始化 WiFi 并发起连接
+ *
+ * 说明：
+ * 1. 以 WIFI_STA 模式连接由 connectToWiFi.h 中宏定义的 SSID/密码。
+ * 2. 本函数不阻塞等待连接完成，连接状态由 main.cpp 的 setup()
+ *    循环查询并推进进度动画，loop() 中由 OLED 状态页持续反映。
+ * 3. 若调用时已连接，会打印详细网络信息（IP、SSID、RSSI、MAC）。
+ */
 void setupWiFi()
 {
   Serial.println("Connecting to WiFi...");

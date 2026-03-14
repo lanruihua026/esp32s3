@@ -46,27 +46,31 @@ static bool waitDataReady(uint32_t timeout_us)
     }
     return true;
 }
-
+/**
+ * @brief 初始化 HX711 模块
+ * 说明：
+ * 1. 设置引脚模式，确保 SCK 初始为 LOW。
+ * 2. 上电后等待 1.2 秒预热，降低初始漂移影响。
+ * 3. 丢弃前 8 帧数据，进一步稳定读数。
+ * 4. 调用 tareScale() 进行去皮，准备好称重使用。
+ * 5. 设置 isScaleReady 标志，允许后续读取重量。
+ */
 void setupHX711()
 {
-    Serial.println("Initializing HX711...");
-
+    // Serial.println("Initializing HX711...");
     pinMode(HX711_DT, INPUT);
     pinMode(HX711_SCK, OUTPUT);
     digitalWrite(HX711_SCK, LOW);
-
     // 上电后给传感器一点预热时间，降低初始漂移影响
     delay(1200);
-
     // 丢弃若干帧启动阶段的不稳定数据
     for (int i = 0; i < 8; ++i)
     {
         readRawData();
     }
-
     isScaleReady = true;
     tareScale();
-    Serial.println("HX711 initialized. Place known weight for calibration.");
+    // Serial.println("HX711 initialized. Place known weight for calibration.");
 }
 
 /**
@@ -116,7 +120,9 @@ static int32_t readRawData()
 }
 
 /**
- * @brief 多次采样求均值
+ * @brief 多次采样求均值，剔除无效帧
+ * @param samples 采样次数（<=0 时直接返回 0）
+ * @return 有效样本的平均原始 ADC 值；全部失败时返回 0
  *
  * 说明：readRawData() 失败会返回 0，这里把失败样本剔除。
  */
@@ -148,6 +154,15 @@ static float readAverageRaw(int samples)
     return (float)sum / validCount;
 }
 
+/**
+ * @brief 读取当前重量（单位：克）
+ * @return 当前重量（g），未就绪或重量为负时返回 0
+ *
+ * 说明：
+ * 1. 对多次采样均值进行去皮（减去 zero_offset）。
+ * 2. 首次受力超过阈值时自动锁定方向，统一让重量为正值。
+ * 3. 小于死区阈值的抖动直接归零，提升静止显示稳定性。
+ */
 float getWeight()
 {
     if (!isScaleReady)
@@ -186,6 +201,15 @@ float getWeight()
     return weight;
 }
 
+/**
+ * @brief 以已知砝码重量校准传感器
+ * @param knownWeight 已知砝码的实际重量（单位：克，必须 > 0）
+ *
+ * 说明：
+ * 校准前请确保秤盘已去皮（调用过 tareScale()）。
+ * 函数通过多次采样计算新的 calibration_factor（raw/g），
+ * 并将结果打印到串口，方便记录后写入固件常量。
+ */
 void calibrateScale(float knownWeight)
 {
     if (!isScaleReady)
@@ -211,7 +235,13 @@ void calibrateScale(float knownWeight)
     Serial.print("New calibration factor: ");
     Serial.println(calibration_factor);
 }
-
+/**
+ * @brief HX711去皮函数，用于将当前传感器读数设为零点
+ * 说明：
+ * 1. 读取当前原始值作为 zero_offset，后续重量计算会基于这个零点进行调整。
+ * 2. 调用后会重置方向锁定，允许重新识别受力方向，适应放置方式调整。
+ * 3. 这个函数在 setupHX711() 中被调用，完成初始去皮；也可以在运行时调用，适应环境变化或重新放置后的去皮需求。
+ */
 void tareScale()
 {
     if (!isScaleReady)
@@ -219,7 +249,7 @@ void tareScale()
         return;
     }
 
-    Serial.println("Taring scale...");
+    // Serial.println("Taring scale...");
 
     // 读取当前空载平均值作为零点偏移
     const int samples = 15;
@@ -228,10 +258,14 @@ void tareScale()
     // 重新去皮后允许再次识别方向
     direction_locked = false;
 
-    Serial.print("Zero offset: ");
-    Serial.println(zero_offset);
+    // Serial.print("Zero offset: ");
+    // Serial.println(zero_offset);
 }
-
+/**
+ * @brief 设置校准因子
+ * @param factor 每克对应的原始 ADC 差值（raw / g）
+ * 说明：这个函数提供了直接设置校准因子的接口，适用于你已经通过其他方式（如 PC 软件）计算出校准因子，或者想要手动调整校准因子以微调称重结果的场景。通常情况下，你只需要在 calibrateScale() 中进行校准，setupHX711() 已经调用了 tareScale() 来完成初始去皮，后续如果需要调整校准因子，可以直接调用 setCalibrationFactor() 来更新。
+ */
 void setCalibrationFactor(float factor)
 {
     if (factor != 0.0f)

@@ -122,6 +122,15 @@ namespace
     }
 }
 
+/**
+ * @brief 配置并初始化 OneNET MQTT 模块
+ * @param config OneNET 连接配置（host、port、productId、deviceName、base64Key、tokenExpireAt、signMethod）
+ *
+ * 说明：
+ * 1. 保存配置并生成物模型标准 Topic 字符串缓存。
+ * 2. 配置 MQTT 客户端的服务器地址、消息回调及发送缓冲区大小。
+ * 3. 本函数只做配置，真实连接延后到 oneNetMqttLoop() 自动完成。
+ */
 void oneNetMqttBegin(const OneNetMqttConfig &config)
 {
     gConfig = config;
@@ -139,6 +148,14 @@ void oneNetMqttBegin(const OneNetMqttConfig &config)
     gInited = true;
 }
 
+/**
+ * @brief 维护 MQTT 连接与消息收发（在 loop() 中持续调用）
+ *
+ * 说明：
+ * 1. 模块未初始化时直接返回。
+ * 2. 断开时调用 tryConnect() 尝试重连（内部有 3s 限流）。
+ * 3. 已连接时调用 PubSubClient::loop() 处理保活和下行消息。
+ */
 void oneNetMqttLoop()
 {
     if (!gInited)
@@ -156,11 +173,27 @@ void oneNetMqttLoop()
     gMqttClient.loop();
 }
 
+/**
+ * @brief 查询 MQTT 是否处于已连接状态
+ * @return true 已连接；false 未连接或模块未初始化
+ */
 bool oneNetMqttConnected()
 {
     return gMqttClient.connected();
 }
 
+/**
+ * @brief 向 OneNET 平台上报三仓物模型属性
+ * @param phone   手机仓数据（重量、百分比、满溢标志）
+ * @param mouse   鼠标仓数据（重量、百分比、满溢标志）
+ * @param battery 电池仓数据（重量、百分比、满溢标志）
+ * @return true 发布成功；false MQTT 未连接或发布失败
+ *
+ * 说明：
+ * 按 OneJSON 格式组装 9 个属性的 payload（约 380 字节），
+ * 发布至物模型属性上报 Topic。float 使用 dtostrf 格式化，
+ * 发送缓冲区已在 oneNetMqttBegin() 中扩大至 512 字节。
+ */
 bool oneNetMqttUploadProperties(
     const BoxBinData &phone,
     const BoxBinData &mouse,
