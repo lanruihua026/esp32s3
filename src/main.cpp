@@ -239,9 +239,7 @@ void setup()
   showBootProgress(86, "Buttons");
   setupButtons();
   setButton1Callback([]()
-                     { setOledPage(1); }); // 按键1：切换到识别结果展示页
-  setButton2Callback([]()
-                     { setOledPage(0); }); // 按键2：切换到综合信息页
+                     { toggleOledPage(); }); // 按键1：循环切换页面
   delay(100);
 
   // 7) OneNET MQTT 初始化（86%~100%）

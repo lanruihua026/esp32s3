@@ -86,7 +86,16 @@ void setOledPage(uint8_t page)
 }
 
 /**
- * @brief 显示 AI 识别结果页
+ * @brief 循环切换 OLED 显示页面
+ * 说明：每次调用在 0 和 1 之间循环切换，由按键1回调调用。
+ */
+void toggleOledPage()
+{
+    g_oledPage = (g_oledPage == 0) ? 1 : 0;
+}
+
+/**
+ * @brief 显示模型识别结果页
  *
  * 页面内容：
  * 1. 页面标题
@@ -103,7 +112,7 @@ static void showAiResultPage()
 
     // 标题行
     oledDisplay.setCursor(0, 0);
-    oledDisplay.println("==== AI Result ====");
+    oledDisplay.println("===Detected Result===");
 
     if (g_aiDetected)
     {
@@ -150,11 +159,6 @@ static void showAiResultPage()
         snprintf(ageBuf, sizeof(ageBuf), "Updated: %lus ago", (unsigned long)ageSec);
         oledDisplay.println(ageBuf);
     }
-
-    // 底部提示当前页
-    oledDisplay.setCursor(0, 56);
-    oledDisplay.println("[Btn2: Info Page]");
-
     oledDisplay.display();
 }
 

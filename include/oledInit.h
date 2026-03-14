@@ -71,6 +71,11 @@ void setAiResult(bool detected, const char *label, float conf, uint32_t updateMs
  */
 void setOledPage(uint8_t page);
 
+/**
+ * @brief 循环切换 OLED 显示页面（0→1→0→...）
+ */
+void toggleOledPage();
+
 /** * @brief 显示开机进度条页面
  * @param progress 进度百分比（0~100）
  * @param statusText 当前阶段文本
