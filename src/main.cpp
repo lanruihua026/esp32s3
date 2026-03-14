@@ -4,7 +4,7 @@
 #include "oledInit.h"
 #include "onenetMqtt.h"
 #include "buttonControl.h"
-
+#include "servoControl.h"
 // ===== 业务参数 =====
 #define Warnlight 6             // 告警灯 GPIO
 #define FULL_WEIGHT 1000        // 实际满载阈值（g）：HX711量程5000g，设定最大载重1000g
@@ -216,6 +216,10 @@ void setup()
     showBootProgress(wifiProgress, "WiFi Connecting");
   }
 
+  initServo();      // 初始化舵机
+  setServoAngle(0); // 默认角度
+  showBootProgress(50, "Servo Initialized");
+
   if (WiFi.status() == WL_CONNECTED)
   {
     showBootProgress(70, "WiFi Connected");
@@ -235,7 +239,7 @@ void setup()
   showBootProgress(86, "Buttons");
   setupButtons();
   setButton1Callback([]()
-                     { setOledPage(1); }); // 按键1：切换到 AI 识别结果页
+                     { setOledPage(1); }); // 按键1：切换到识别结果展示页
   setButton2Callback([]()
                      { setOledPage(0); }); // 按键2：切换到综合信息页
   delay(100);
@@ -281,8 +285,23 @@ void loop()
 
   // 先处理来自摄像头的识别串口数据，保证消息不会堆积。
   pollCameraUart();
-
-  // 按键轮询，消抗抙6并下降沿触发回调
+  // 上一步已经完成识别，根据识别结果旋转舵机角度
+  if (g_lastAiDetected)
+  {
+    if (strcmp(g_lastAiLabel, "mobile-phone") == 0)
+    {
+      setServoAngle(0); // 手机仓
+    }
+    else if (strcmp(g_lastAiLabel, "Mouse") == 0)
+    {
+      setServoAngle(90); // 鼠标仓
+    }
+    else if (strcmp(g_lastAiLabel, "Battery") == 0)
+    {
+      setServoAngle(180); // 电池仓
+    }
+  }
+  // 按键轮询，消抖并且是下降沿触发回调
   pollButtons();
 
   // 维护 MQTT 连接、收发和自动重连
