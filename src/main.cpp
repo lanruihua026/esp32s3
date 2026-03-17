@@ -286,17 +286,25 @@ void loop()
   // 上一步已经完成识别，根据识别结果旋转舵机角度
   if (g_lastAiDetected)
   {
-    if (strcmp(g_lastAiLabel, "mobile-phone") == 0)
+    if (strcmp(g_lastAiLabel, "MobilePhone") == 0)
     {
       setServoAngle(0); // 手机仓
     }
-    else if (strcmp(g_lastAiLabel, "Mouse") == 0)
+    else if (strcmp(g_lastAiLabel, "Charger") == 0)
     {
-      setServoAngle(90); // 鼠标仓
+      setServoAngle(45); // 充电器仓
     }
     else if (strcmp(g_lastAiLabel, "Battery") == 0)
     {
-      setServoAngle(180); // 电池仓
+      setServoAngle(90); // 电池仓
+    }
+    else if (strcmp(g_lastAiLabel, "Earphone") == 0)
+    {
+      setServoAngle(135); // 耳机仓
+    }
+    else
+    {
+      setServoAngle(0); // 默认角度
     }
   }
   // 按键轮询，消抖并且是下降沿触发回调
