@@ -194,7 +194,7 @@ void setup()
 
   // 关闭板载 RGB LED，防止上电随机点亮
   boardRgb.begin();
-  boardRgb.setPixelColor(0, 0);  // 黑色 = 关闭
+  boardRgb.setPixelColor(0, 0); // 黑色 = 关闭
   boardRgb.show();
 
   // 初始化来自 ESP32-CAM 的串口通道。
@@ -318,6 +318,10 @@ void loop()
       setServoAngle(0); // 默认角度
     }
   }
+  else
+  {
+    setServoAngle(0); // 默认角度
+  }
   // 按键轮询，消抖并且是下降沿触发回调
   pollButtons();
 
@@ -364,7 +368,7 @@ void loop()
     // OLED 上传状态置为 active
     setUploadingStatus(true);
 
-    // 上传物模型属性：手机仓 / 鼠标仓 / 电池仓（当前同源）
+    // 上传物模型属性：手机仓 / 数码配件仓 / 电池仓（当前同源）
     oneNetMqttUploadProperties(binData, binData, binData);
 
     // 这里额外输出最近一次 AI 状态，方便你在串口联调时观察。
