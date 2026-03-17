@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Adafruit_NeoPixel.h>
 #include "connectToWiFi.h"
 #include "hx711.h"
 #include "oledInit.h"
@@ -7,8 +8,13 @@
 #include "servoControl.h"
 // ===== 业务参数 =====
 #define Warnlight 6             // 告警灯 GPIO
+#define RGB_LED_PIN 38          // 板载 WS2812 RGB LED GPIO（ESP32-S3-DevKitM-1）
+#define RGB_LED_NUM 1           // 板载只有 1 颗
 #define FULL_WEIGHT 1000        // 实际满载阈值（g）：HX711量程5000g，设定最大载重1000g
 #define HX711_CAL_FACTOR 449.1f // HX711 校准因子（raw/g）：以216g砝码校准（原始值1000×97/216≈449.1）
+
+// 板载 RGB LED 驱动对象（上电即关闭，防止误点亮）
+static Adafruit_NeoPixel boardRgb(RGB_LED_NUM, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // ===== ESP32-CAM -> ESP32-S3 串口参数 =====
 // 接线说明：
@@ -185,6 +191,11 @@ void pollCameraUart()
 void setup()
 {
   Serial.begin(115200);
+
+  // 关闭板载 RGB LED，防止上电随机点亮
+  boardRgb.begin();
+  boardRgb.setPixelColor(0, 0);  // 黑色 = 关闭
+  boardRgb.show();
 
   // 初始化来自 ESP32-CAM 的串口通道。
   CameraUart.begin(CAM_UART_BAUD, SERIAL_8N1, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
