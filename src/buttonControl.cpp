@@ -12,6 +12,10 @@ static volatile uint32_t g_btn1IsrMs = 0;
 static volatile bool g_btn2Pending = false;
 static volatile uint32_t g_btn2IsrMs = 0;
 
+// ===== 冷却时间戳（防止松开时弹起抖动被误判为新按键）=====
+static uint32_t g_btn1LastFireMs = 0;
+static uint32_t g_btn2LastFireMs = 0;
+
 // ===== 中断服务程序（IRAM_ATTR：存放在 IRAM，保证执行速度）=====
 // 只做最轻量的操作：记录时间戳 + 置位标志，不调用任何库函数。
 
@@ -90,9 +94,14 @@ void pollButtons()
     if (g_btn1Pending && (now - g_btn1IsrMs) >= BTN_DEBOUNCE_MS)
     {
         g_btn1Pending = false;
-        if (g_btn1Cb != nullptr)
+        // 冷却期内忽略（防止松开时弹起抖动触发二次回调）
+        if ((now - g_btn1LastFireMs) >= BTN_COOLDOWN_MS)
         {
-            g_btn1Cb();
+            g_btn1LastFireMs = now;
+            if (g_btn1Cb != nullptr)
+            {
+                g_btn1Cb();
+            }
         }
     }
 
@@ -100,9 +109,13 @@ void pollButtons()
     if (g_btn2Pending && (now - g_btn2IsrMs) >= BTN_DEBOUNCE_MS)
     {
         g_btn2Pending = false;
-        if (g_btn2Cb != nullptr)
+        if ((now - g_btn2LastFireMs) >= BTN_COOLDOWN_MS)
         {
-            g_btn2Cb();
+            g_btn2LastFireMs = now;
+            if (g_btn2Cb != nullptr)
+            {
+                g_btn2Cb();
+            }
         }
     }
 }

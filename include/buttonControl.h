@@ -8,7 +8,8 @@
 #define BTN2_PIN 10 // 按键2：IO10，按下关闭 RGB LED
 
 // ===== 消抖参数 =====
-#define BTN_DEBOUNCE_MS 20 // 消抖时间（ms）；中断精准捕获边沿，20ms 足够
+#define BTN_DEBOUNCE_MS 20  // 消抖时间（ms）：等待抖动稳定
+#define BTN_COOLDOWN_MS 300 // 冷却时间（ms）：有效触发后屏蔽松开时的弹起抖动
 
 /**
  * @brief 按键回调函数类型
