@@ -43,6 +43,7 @@ static bool waitDataReady(uint32_t timeout_us)
         {
             return false;
         }
+        yield(); // 喂看门狗，防止长时间忙等触发 TWDT 重启
     }
     return true;
 }

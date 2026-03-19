@@ -227,10 +227,6 @@ void setup()
     showBootProgress(wifiProgress, "WiFi Connecting");
   }
 
-  initServo();      // 初始化舵机
-  setServoAngle(0); // 默认角度
-  showBootProgress(50, "Servo Initialized");
-
   if (WiFi.status() == WL_CONNECTED)
   {
     showBootProgress(70, "WiFi Connected");
@@ -240,6 +236,11 @@ void setup()
     showBootProgress(70, "WiFi Failed");
   }
   delay(200);
+
+  // 舵机初始化放在 WiFi 之后，供电更稳定，避免 attach 后立刻 write 造成电流冲击
+  showBootProgress(75, "Servo Init");
+  initServo();
+  setServoAngle(0);
 
   // 4) 告警灯 GPIO 初始化（70%~80%）
   showBootProgress(78, "Warning Light");
@@ -370,15 +371,5 @@ void loop()
 
     // 上传物模型属性：手机仓 / 数码配件仓 / 电池仓（当前同源）
     oneNetMqttUploadProperties(binData, binData, binData);
-
-    // 这里额外输出最近一次 AI 状态，方便你在串口联调时观察。
-    // if (g_lastAiDetected)
-    // {
-    //   Serial.printf("[AI-STATE] label=%s conf=%.3f age=%lums\n", g_lastAiLabel, g_lastAiConf, (unsigned long)(now - g_lastAiUpdateMs));
-    // }
-    // else
-    // {
-    //   Serial.printf("[AI-STATE] none age=%lums\n", (unsigned long)(now - g_lastAiUpdateMs));
-    // }
   }
 }
