@@ -1,7 +1,7 @@
 ﻿#include "oledInit.h"
 #include <WiFi.h>
 
-Adafruit_SSD1306 oledDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+Adafruit_SH1106G oledDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // ===== 运行态显示所需共享状态 =====
 static bool uploadingActive = false; // 是否正在上传
@@ -108,7 +108,7 @@ static void showAiResultPage()
 {
     oledDisplay.clearDisplay();
     oledDisplay.setTextSize(1);
-    oledDisplay.setTextColor(SSD1306_WHITE);
+    oledDisplay.setTextColor(SH110X_WHITE);
 
     // 标题行
     oledDisplay.setCursor(0, 0);
@@ -118,9 +118,9 @@ static void showAiResultPage()
     {
         // 反显 Detected 状态，醒目显示识别成功
         oledDisplay.setCursor(0, 11);
-        oledDisplay.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+        oledDisplay.setTextColor(SH110X_BLACK, SH110X_WHITE);
         oledDisplay.println(" Status: Detected ");
-        oledDisplay.setTextColor(SSD1306_WHITE);
+        oledDisplay.setTextColor(SH110X_WHITE);
 
         // 识别标签（最多显示 20 个字符）
         char labelBuf[21];
@@ -175,7 +175,7 @@ static void showCombinedPage()
 {
     oledDisplay.clearDisplay();
     oledDisplay.setTextSize(1);
-    oledDisplay.setTextColor(SSD1306_WHITE);
+    oledDisplay.setTextColor(SH110X_WHITE);
 
     oledDisplay.setCursor(0, 0);
     oledDisplay.println("====== STATUS ======");
@@ -184,17 +184,17 @@ static void showCombinedPage()
     if (WiFi.status() == WL_CONNECTED)
     {
         oledDisplay.print("WiFi: ");
-        oledDisplay.setTextColor(SSD1306_WHITE);
+        oledDisplay.setTextColor(SH110X_WHITE);
         oledDisplay.println("Online");
     }
     else
     {
-        oledDisplay.setTextColor(SSD1306_WHITE);
+        oledDisplay.setTextColor(SH110X_WHITE);
         oledDisplay.print("WiFi: ");
         // 反显 Offline，提高离线状态可读性
-        oledDisplay.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+        oledDisplay.setTextColor(SH110X_BLACK, SH110X_WHITE);
         oledDisplay.println("Offline");
-        oledDisplay.setTextColor(SSD1306_WHITE);
+        oledDisplay.setTextColor(SH110X_WHITE);
     }
 
     // 计算重量百分比（以 fullWeight 为 100% 基准）
@@ -219,29 +219,29 @@ static void showCombinedPage()
     if (currentWeight >= fullWeight)
     {
         // 超阈值反显提示
-        oledDisplay.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+        oledDisplay.setTextColor(SH110X_BLACK, SH110X_WHITE);
         oledDisplay.println("  Status: FULL   ");
     }
     else
     {
-        oledDisplay.setTextColor(SSD1306_WHITE);
+        oledDisplay.setTextColor(SH110X_WHITE);
         oledDisplay.println("Status: Normal");
     }
-    oledDisplay.setTextColor(SSD1306_WHITE);
+    oledDisplay.setTextColor(SH110X_WHITE);
 
     oledDisplay.setCursor(0, 44);
     if (currentWeight >= fullWeight)
     {
         // 超阈值反显提示
-        oledDisplay.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+        oledDisplay.setTextColor(SH110X_BLACK, SH110X_WHITE);
         oledDisplay.println("  Status: FULL   ");
     }
     else
     {
-        oledDisplay.setTextColor(SSD1306_WHITE);
+        oledDisplay.setTextColor(SH110X_WHITE);
         oledDisplay.println("Status: Normal");
     }
-    oledDisplay.setTextColor(SSD1306_WHITE);
+    oledDisplay.setTextColor(SH110X_WHITE);
 
     oledDisplay.setCursor(0, 55);
     if (WiFi.status() == WL_CONNECTED)
@@ -314,7 +314,7 @@ void showBootProgress(uint8_t progress, const char *statusText)
 
     oledDisplay.clearDisplay();
     oledDisplay.setTextSize(1);
-    oledDisplay.setTextColor(SSD1306_WHITE);
+    oledDisplay.setTextColor(SH110X_WHITE);
 
     oledDisplay.setCursor(25, 0);
     oledDisplay.println("System Boot");
@@ -331,13 +331,13 @@ void showBootProgress(uint8_t progress, const char *statusText)
     oledDisplay.println(displayText);
 
     // 进度条外框
-    oledDisplay.drawRect(barX, barY, barWidth, barHeight, SSD1306_WHITE);
+    oledDisplay.drawRect(barX, barY, barWidth, barHeight, SH110X_WHITE);
 
     // 进度条填充（留 2 像素边框）
     uint8_t fillWidth = (uint8_t)((progress * (barWidth - 4)) / 100);
     if (fillWidth > 0)
     {
-        oledDisplay.fillRect(barX + 2, barY + 2, fillWidth, barHeight - 4, SSD1306_WHITE);
+        oledDisplay.fillRect(barX + 2, barY + 2, fillWidth, barHeight - 4, SH110X_WHITE);
     }
 
     oledDisplay.setCursor(50, 54);
@@ -361,9 +361,9 @@ void setupOLED()
     Wire.begin(SDA_PIN, SCL_PIN, 400000);
 
     // OLED 初始化失败时直接停机，避免后续状态不可见
-    if (!oledDisplay.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
+    if (!oledDisplay.begin(SCREEN_ADDRESS, true))
     {
-        Serial.println("SSD1306 init failed");
+        Serial.println("SH1106 init failed");
         while (true)
         {
             delay(1000);

@@ -2,12 +2,12 @@
 #define _OLED_INIT_H_
 
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_SH110X.h>
 #include <Arduino.h>
 #include <Wire.h>
 
 // ===== OLED 硬件参数 =====
-// 128x64 I2C OLED（SSD1306）
+// 128x64 I2C OLED（SH1106）
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
@@ -22,7 +22,7 @@
 #define HX711_SENSOR_MAX 5000 // 传感器量程上限（g）
 
 // 全局 OLED 对象（在 oledInit.cpp 中定义）
-extern Adafruit_SSD1306 oledDisplay;
+extern Adafruit_SH1106G oledDisplay;
 
 /**
  * @brief 设置满载阈值（影响 OLED 百分比计算与满载状态显示）
