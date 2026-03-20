@@ -76,9 +76,14 @@ bool isOLEDReady();
 void updateOLEDDisplay();
 
 /**
- * @brief 更新当前重量（影响 OLED 重量显示）
+ * @brief 更新当前重量（兼容旧接口，仅更新1号仓）
  */
 void setCurrentWeight(int32_t weight);
+
+/**
+ * @brief 更新三个仓格的当前重量（影响三仓重量页显示）
+ */
+void setCurrentWeights(int32_t weight1, int32_t weight2, int32_t weight3);
 
 /** * @brief 更新 ESP32-CAM 最新 AI 识别结果（供 AI 结果页显示）
  * @param detected  是否识别到目标
@@ -90,14 +95,19 @@ void setAiResult(bool detected, const char *label, float conf, uint32_t updateMs
 
 /**
  * @brief 切换 OLED 当前显示页面
- * @param page  0 = 综合信息页，1 = AI 识别结果页
+ * @param page  0 = 系统状态页，1 = 三仓重量页，2 = 识别结果页
  */
 void setOledPage(uint8_t page);
 
 /**
- * @brief 循环切换 OLED 显示页面（0→1→0→...）
+ * @brief 向右循环切换 OLED 页面（0→1→2→0）
  */
 void toggleOledPage();
+
+/**
+ * @brief 向左循环切换 OLED 页面（0←1←2←0）
+ */
+void prevOledPage();
 
 /**
  * @brief 重置启动模块状态

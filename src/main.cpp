@@ -10,10 +10,10 @@
 #include "hx711_3.h"
 #include "buzzer.h"
 // ===== 常量宏定义 =====
-#define Warnlight 6             // 告警灯 GPIO
-#define RGB_LED_PIN 38          // 板载 WS2812 RGB LED GPIO（ESP32-S3-DevKitM-1）
-#define RGB_LED_NUM 1           // 板载只有 1 颗
-#define FULL_WEIGHT 1000        // 实际满载阈值（g）：HX711量程5000g，设定最大载重1000g
+#define Warnlight 6      // 告警灯 GPIO
+#define RGB_LED_PIN 38   // 板载 WS2812 RGB LED GPIO（ESP32-S3-DevKitM-1）
+#define RGB_LED_NUM 1    // 板载只有 1 颗
+#define FULL_WEIGHT 1000 // 实际满载阈值（g）：HX711量程5000g，设定最大载重1000g
 // ===== HX711 校准因子（raw/g） =====
 // 校准公式：
 //   初次校准：calibration_factor = raw_net / known_weight
@@ -325,7 +325,9 @@ void setup()
   showBootProgress(86, "Buttons");
   setupButtons();
   setButton1Callback([]()
-                     { toggleOledPage(); }); // 按键1：循环切换页面
+                     { prevOledPage(); }); // 按键1：向左翻页
+  setButton2Callback([]()
+                     { toggleOledPage(); }); // 按键2：向右翻页
   setInitModuleStatus(INIT_MODULE_BUTTON, INIT_OK, "Ready");
   delay(100);
 
@@ -429,7 +431,7 @@ void loop()
     currentWeight = (int32_t)getWeight();
     currentWeight2 = (int32_t)getWeight2();
     currentWeight3 = (int32_t)getWeight3();
-    setCurrentWeight(currentWeight);
+    setCurrentWeights(currentWeight, currentWeight2, currentWeight3);
 
     // 满载点亮告警灯（含迟滞，避免阈值附近噪声导致闪烁）
     static bool s_warningOn = false;

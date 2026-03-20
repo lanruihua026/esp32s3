@@ -4,8 +4,8 @@
 #include <Arduino.h>
 
 // ===== 按键引脚定义 =====
-#define BTN1_PIN 9  // 按键1：IO9，按下点亮 RGB LED
-#define BTN2_PIN 10 // 按键2：IO10，按下关闭 RGB LED
+#define BTN1_PIN 9  // 按键1：IO9，当前用于OLED左翻页
+#define BTN2_PIN 10 // 按键2：IO10，当前用于OLED右翻页
 
 // ===== 消抖参数 =====
 #define BTN_DEBOUNCE_MS 20  // 消抖时间（ms）：等待抖动稳定

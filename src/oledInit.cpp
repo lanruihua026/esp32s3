@@ -7,14 +7,16 @@ Adafruit_SH1106G oledDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 static bool g_oledReady = false;
 
 // ===== 运行态显示所需共享状态 =====
-static int32_t currentWeight = 0;    // 当前重量（g）
-static int32_t fullWeight = 1000;    // 满载阈值（g），由 main.cpp 通过 setFullWeight() 初始化
+static int32_t currentWeight1 = 0; // 1号仓当前重量（g）
+static int32_t currentWeight2 = 0; // 2号仓当前重量（g）
+static int32_t currentWeight3 = 0; // 3号仓当前重量（g）
+static int32_t fullWeight = 1000;  // 满载阈值（g），由 main.cpp 通过 setFullWeight() 初始化
 
 // ===== Dirty flag 机制：仅在数据变化时重绘，彻底消除无意义清屏闪烁 =====
 static bool g_displayDirty = true; // 初始强制绘制一次
 
 // ===== OLED 页面管理 =====
-// 0 = 综合信息页；1 = AI 识别结果页；2 = 系统状态页
+// 0 = 系统状态页；1 = 三仓重量页；2 = 识别结果页
 static uint8_t g_oledPage = 0;
 
 // ===== AI 识别结果缓存 =====
@@ -72,9 +74,20 @@ void setRuntimeHealth(bool wifiOk, bool wifiInitTimeout, bool hx711Ok, bool mqtt
  */
 void setCurrentWeight(int32_t weight)
 {
-    if (currentWeight != weight)
+    if (currentWeight1 != weight)
     {
-        currentWeight = weight;
+        currentWeight1 = weight;
+        g_displayDirty = true;
+    }
+}
+
+void setCurrentWeights(int32_t weight1, int32_t weight2, int32_t weight3)
+{
+    if (currentWeight1 != weight1 || currentWeight2 != weight2 || currentWeight3 != weight3)
+    {
+        currentWeight1 = weight1;
+        currentWeight2 = weight2;
+        currentWeight3 = weight3;
         g_displayDirty = true;
     }
 }
@@ -114,25 +127,32 @@ void setAiResult(bool detected, const char *label, float conf, uint32_t updateMs
 
 /**
  * @brief 切换 OLED 显示页面
- * @param page 目标页面编号（0 = 综合信息页；1 = AI 识别结果页）
+ * @param page 目标页面编号（0 = 系统状态页；1 = 三仓重量页；2 = 识别结果页）
  * 说明：由按键回调在 main.cpp 中调用，实现页面切换。
  */
 void setOledPage(uint8_t page)
 {
-    if (g_oledPage != page)
+    uint8_t normalized = page % 3;
+    if (g_oledPage != normalized)
     {
-        g_oledPage = page;
+        g_oledPage = normalized;
         g_displayDirty = true;
     }
 }
 
 /**
  * @brief 循环切换 OLED 显示页面
- * 说明：每次调用在 0 和 1 之间循环切换，由按键1回调调用。
+ * 说明：每次调用按 0→1→2→0 循环切换。
  */
 void toggleOledPage()
 {
     g_oledPage = (g_oledPage + 1) % 3;
+    g_displayDirty = true;
+}
+
+void prevOledPage()
+{
+    g_oledPage = (g_oledPage + 2) % 3;
     g_displayDirty = true;
 }
 
@@ -228,15 +248,14 @@ static void showAiResultPage()
 }
 
 /**
- * @brief 显示综合状态页
+ * @brief 显示三仓重量页
  *
  * 页面内容：
- * 1. WiFi 在线状态
- * 2. 当前重量
- * 3. 满载状态
- * 4. 上传状态（含动画）
+ * 1. 三个仓格重量（g）
+ * 2. 三个仓格百分比（以 fullWeight 为 100%）
+ * 3. 三个仓格满溢状态
  */
-static void showCombinedPage()
+static void showBinWeightPage()
 {
     if (!g_oledReady)
     {
@@ -248,101 +267,30 @@ static void showCombinedPage()
     oledDisplay.setTextColor(SH110X_WHITE);
 
     oledDisplay.setCursor(0, 0);
-    oledDisplay.println("====== STATUS ======");
+    oledDisplay.println("=== Bin Weights ===");
 
-    oledDisplay.setCursor(0, 11);
-    if (g_wifiOk)
-    {
-        oledDisplay.print("WiFi: ");
-        oledDisplay.setTextColor(SH110X_WHITE);
-        oledDisplay.println("Online");
-    }
-    else
-    {
-        oledDisplay.setTextColor(SH110X_WHITE);
-        oledDisplay.print("WiFi: ");
-        // 初始化超时时明确显示 ERROR，避免“启动失败但后续成功”造成误读。
-        oledDisplay.setTextColor(SH110X_BLACK, SH110X_WHITE);
-        oledDisplay.println(g_wifiInitTimeout ? "ERROR" : "Offline");
-        oledDisplay.setTextColor(SH110X_WHITE);
-    }
+    const int32_t weights[3] = {currentWeight1, currentWeight2, currentWeight3};
+    const uint8_t linesY[3] = {14, 28, 42};
 
-    // 计算重量百分比（以 fullWeight 为 100% 基准）
-    float loadPct = (currentWeight * 100.0f) / fullWeight;
-    if (loadPct < 0.0f)
-        loadPct = 0.0f;
-    if (loadPct > 100.0f)
-        loadPct = 100.0f;
+    for (uint8_t i = 0; i < 3; ++i)
+    {
+        float pct = (weights[i] * 100.0f) / fullWeight;
+        if (pct < 0.0f)
+            pct = 0.0f;
+        if (pct > 100.0f)
+            pct = 100.0f;
+        bool isFull = (weights[i] >= fullWeight);
 
-    oledDisplay.setCursor(0, 22);
-    oledDisplay.print("Weight: ");
-    oledDisplay.print(currentWeight);
-    oledDisplay.println(" g");
+        char lineBuf[25];
+        snprintf(lineBuf, sizeof(lineBuf), "B%u:%4ldg %3u%% %s", i + 1,
+                 (long)weights[i], (unsigned int)(pct + 0.5f), isFull ? "FULL" : "OK");
 
-    // 显示负载百分比
-    char pctBuf[20];
-    snprintf(pctBuf, sizeof(pctBuf), "Load:  %.2f%%", loadPct);
-    oledDisplay.setCursor(0, 33);
-    oledDisplay.println(pctBuf);
-
-    oledDisplay.setCursor(0, 44);
-    if (currentWeight >= fullWeight)
-    {
-        // 超阈值反显提示
-        oledDisplay.setTextColor(SH110X_BLACK, SH110X_WHITE);
-        oledDisplay.println("  Status: FULL   ");
-    }
-    else
-    {
-        oledDisplay.setTextColor(SH110X_WHITE);
-        oledDisplay.println("Status: Normal");
-    }
-    oledDisplay.setTextColor(SH110X_WHITE);
-
-    char errSummary[28] = {0};
-    bool hasErr = false;
-    if (!g_hx711Ok)
-    {
-        strncat(errSummary, "HX711 ", sizeof(errSummary) - strlen(errSummary) - 1);
-        hasErr = true;
-    }
-    if (g_wifiInitTimeout && !g_wifiOk)
-    {
-        strncat(errSummary, "WiFi ", sizeof(errSummary) - strlen(errSummary) - 1);
-        hasErr = true;
-    }
-    if (g_wifiOk && !g_mqttOk)
-    {
-        strncat(errSummary, "MQTT ", sizeof(errSummary) - strlen(errSummary) - 1);
-        hasErr = true;
+        oledDisplay.setCursor(0, linesY[i]);
+        oledDisplay.println(lineBuf);
     }
 
-    oledDisplay.setCursor(0, 55);
-    if (hasErr)
-    {
-        oledDisplay.setTextColor(SH110X_BLACK, SH110X_WHITE);
-        oledDisplay.print("ERR: ");
-        oledDisplay.println(errSummary);
-        oledDisplay.setTextColor(SH110X_WHITE);
-    }
-    else
-    {
-        oledDisplay.print("MQTT : ");
-        if (g_mqttOk)
-        {
-            oledDisplay.println("OK");
-        }
-        else if (!g_wifiOk)
-        {
-            oledDisplay.println("No WiFi");
-        }
-        else
-        {
-            oledDisplay.setTextColor(SH110X_BLACK, SH110X_WHITE);
-            oledDisplay.println("Error");
-            oledDisplay.setTextColor(SH110X_WHITE);
-        }
-    }
+    oledDisplay.setCursor(0, 56);
+    oledDisplay.println("BTN1<-   ->BTN2");
 
     oledDisplay.display();
 }
@@ -374,11 +322,11 @@ static void showSystemStatusPage()
     oledDisplay.println(g_mqttOk ? "OK" : "OFFLINE");
 
     oledDisplay.setCursor(0, 44);
-    oledDisplay.print("Page : ");
-    oledDisplay.println("Status(2)");
+    oledDisplay.print("OLED : ");
+    oledDisplay.println(g_oledReady ? "OK" : "ERROR");
 
     oledDisplay.setCursor(0, 55);
-    oledDisplay.print("Press BTN1 switch");
+    oledDisplay.print("BTN1<-   ->BTN2");
 
     oledDisplay.display();
 }
@@ -406,17 +354,17 @@ void updateOLEDDisplay()
     g_displayDirty = false;
 
     // 根据当前选中页面分支显示
-    if (g_oledPage == 1)
-    {
-        showAiResultPage();
-    }
-    else if (g_oledPage == 2)
+    if (g_oledPage == 0)
     {
         showSystemStatusPage();
     }
+    else if (g_oledPage == 1)
+    {
+        showBinWeightPage();
+    }
     else
     {
-        showCombinedPage();
+        showAiResultPage();
     }
 }
 /**
