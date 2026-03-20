@@ -19,3 +19,17 @@ void buzzerBeep(uint32_t duration_ms)
     delay(duration_ms);             // 持续指定时间
     digitalWrite(BUZZER_PIN, HIGH); // 关闭蜂鸣器
 }
+/**
+ * @brief 蜂鸣器持续打开
+ */
+void buzzerOn()
+{
+    digitalWrite(BUZZER_PIN, LOW); // 打开蜂鸣器
+}
+/**
+ * @brief 蜂鸣器持续关闭
+ */
+void buzzerOff()
+{
+    digitalWrite(BUZZER_PIN, HIGH); // 关闭蜂鸣器
+}

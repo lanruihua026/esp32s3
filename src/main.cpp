@@ -6,6 +6,7 @@
 #include "onenetMqtt.h"
 #include "buttonControl.h"
 #include "servoControl.h"
+#include "buzzer.h"
 // ===== 常量宏定义 =====
 #define Warnlight 6             // 告警灯 GPIO
 #define RGB_LED_PIN 38          // 板载 WS2812 RGB LED GPIO（ESP32-S3-DevKitM-1）
@@ -280,6 +281,11 @@ void setup()
   pinMode(Warnlight, OUTPUT);
   delay(100);
 
+  // 蜂鸣器初始化
+  buzzerInit();
+  showBootProgress(82, "Buzzer");
+  delay(100);
+
   // 5) 按键初始化，并注册回调
   setInitModuleStatus(INIT_MODULE_BUTTON, INIT_RUNNING, "IRQ");
   showBootProgress(86, "Buttons");
@@ -395,11 +401,13 @@ void loop()
     {
       s_warningOn = true;
       digitalWrite(Warnlight, HIGH);
+      buzzerOn(); // 满载时持续打开蜂鸣器
     }
     else if (s_warningOn && currentWeight < FULL_WEIGHT - 100)
     {
       s_warningOn = false;
       digitalWrite(Warnlight, LOW);
+      buzzerOff(); // 停止蜂鸣器
     }
   }
 
