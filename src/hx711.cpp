@@ -27,7 +27,7 @@ static const float ZERO_DEADBAND_G = 2.0f;
 static const float DIRECTION_LOCK_RAW_THRESHOLD = 30000.0f;
 
 static int32_t readRawData();
-static float readAverageRaw(int samples);
+static float readAverageRaw(int samples, int *outValidCount = nullptr);
 
 /**
  * @brief 等待 HX711 数据就绪（DT 由高变低）
@@ -56,7 +56,7 @@ static bool waitDataReady(uint32_t timeout_us)
  * 4. 调用 tareScale() 进行去皮，准备好称重使用。
  * 5. 设置 isScaleReady 标志，允许后续读取重量。
  */
-void setupHX711()
+bool setupHX711()
 {
     // Serial.println("Initializing HX711...");
     pinMode(HX711_DT, INPUT);
@@ -69,9 +69,20 @@ void setupHX711()
     {
         readRawData();
     }
+
+    // 通过一次均值采样判断传感器是否可用，避免后续流程误判为“初始化成功”。
+    float probeRaw = readAverageRaw(5);
+    if (probeRaw == 0.0f)
+    {
+        isScaleReady = false;
+        Serial.println("HX711: init failed (probe timeout)");
+        return false;
+    }
+
     isScaleReady = true;
     tareScale();
     // Serial.println("HX711 initialized. Place known weight for calibration.");
+    return true;
 }
 
 /**
@@ -127,10 +138,11 @@ static int32_t readRawData()
  *
  * 说明：readRawData() 失败会返回 0，这里把失败样本剔除。
  */
-static float readAverageRaw(int samples)
+static float readAverageRaw(int samples, int *outValidCount)
 {
     if (samples <= 0)
     {
+        if (outValidCount != nullptr) *outValidCount = 0;
         return 0.0f;
     }
 
@@ -146,6 +158,8 @@ static float readAverageRaw(int samples)
             validCount++;
         }
     }
+
+    if (outValidCount != nullptr) *outValidCount = validCount;
 
     if (validCount == 0)
     {
@@ -172,7 +186,9 @@ float getWeight()
     }
 
     const int samples = 5;
-    float rawValue = readAverageRaw(samples);
+    int validCount = 0;
+    float rawValue = readAverageRaw(samples, &validCount);
+    if (validCount == 0) return 0.0f;  // 全部超时，返回0避免误算
     float netValue = rawValue - zero_offset;
 
     // 自动识别受力方向并锁定：

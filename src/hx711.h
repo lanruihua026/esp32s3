@@ -7,8 +7,9 @@
  * @brief 初始化 HX711 称重模块
  *
  * 包含引脚初始化、预热、丢弃前几帧不稳定数据与去皮。
+ * @return true 初始化成功；false 初始化失败（数据未就绪）
  */
-void setupHX711();
+bool setupHX711();
 
 /**
  * @brief 获取当前重量（克）

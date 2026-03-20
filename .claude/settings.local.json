@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(pio run:*)",
-      "Bash(/c/Users/rogwa/.platformio/penv/Scripts/pio.exe run:*)"
+      "Bash(/c/Users/rogwa/.platformio/penv/Scripts/pio.exe run:*)",
+      "Bash(~/.platformio/penv/Scripts/pio run:*)"
     ]
   }
 }
