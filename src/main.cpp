@@ -6,13 +6,15 @@
 #include "onenetMqtt.h"
 #include "buttonControl.h"
 #include "servoControl.h"
+#include "hx711_2.h"
 #include "buzzer.h"
 // ===== 常量宏定义 =====
 #define Warnlight 6             // 告警灯 GPIO
 #define RGB_LED_PIN 38          // 板载 WS2812 RGB LED GPIO（ESP32-S3-DevKitM-1）
 #define RGB_LED_NUM 1           // 板载只有 1 颗
 #define FULL_WEIGHT 1000        // 实际满载阈值（g）：HX711量程5000g，设定最大载重1000g
-#define HX711_CAL_FACTOR 449.1f // HX711 校准因子（raw/g）：以216g砝码校准（原始值1000×97/216≈449.1）
+#define HX711_CAL_FACTOR 449.1f   // HX711 校准因子（raw/g）：以216g砝码校准（原始值1000×97/216≈449.1）
+#define HX711_CAL_FACTOR_2 449.1f // 第二个 HX711 校准因子（待独立校准，暂与第一个相同）
 
 // 板载 RGB LED 驱动对象（上电即关闭，防止误点亮）
 static Adafruit_NeoPixel boardRgb(RGB_LED_NUM, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -52,9 +54,11 @@ static uint32_t lastWiFiRetryMs = 0;
 
 // 当前重量缓存（供 OLED 显示、告警判断、云上报复用）
 static int32_t currentWeight = 0;
+static int32_t currentWeight2 = 0; // 第二个 HX711 重量缓存
 
 // 初始化与运行态健康状态缓存
 static bool g_hx711InitOk = false;
+static bool g_hx711_2InitOk = false;
 static bool g_wifiInitTimeout = false;
 static bool g_wifiEverConnected = false;
 
@@ -239,6 +243,14 @@ void setup()
   setCalibrationFactor(HX711_CAL_FACTOR);
   delay(100);
 
+  // 2.5) 第二个 HX711 初始化与校准
+  showBootProgress(33, "HX711_2 Sensor");
+  g_hx711_2InitOk = setupHX711_2();
+  delay(100);
+  showBootProgress(36, "HX711_2 Cal");
+  setCalibrationFactor2(HX711_CAL_FACTOR_2);
+  delay(100);
+
   // 3) WiFi 连接（40%~70%，最多等待 10 秒后继续进入系统）
   setInitModuleStatus(INIT_MODULE_WIFI, INIT_RUNNING, "Connecting");
   showBootProgress(40, "WiFi Connecting");
@@ -393,6 +405,7 @@ void loop()
   {
     lastSampleMs = now;
     currentWeight = (int32_t)getWeight();
+    currentWeight2 = (int32_t)getWeight2();
     setCurrentWeight(currentWeight);
 
     // 满载点亮告警灯（含迟滞，避免阈值附近噪声导致闪烁）
@@ -416,7 +429,7 @@ void loop()
   {
     lastReportMs = now;
 
-    // 暂时三仓数据源统一为同一个 HX711
+    // 暂时第一个 HX711 用于手机仓，第二个 HX711 用于数码配件仓，电池仓暂用第一个
     // 百分比基于最大满溢重量1000g，满溢阈值 FULL_WEIGHT 独立判断
     float pct = (currentWeight * 100.0f) / 1000.0f;
     if (pct < 0.0f)
@@ -425,10 +438,18 @@ void loop()
       pct = 100.0f;
     bool isFull = (currentWeight >= FULL_WEIGHT);
 
-    BoxBinData binData = {currentWeight, pct, isFull};
+    float pct2 = (currentWeight2 * 100.0f) / 1000.0f;
+    if (pct2 < 0.0f)
+      pct2 = 0.0f;
+    if (pct2 > 100.0f)
+      pct2 = 100.0f;
+    bool isFull2 = (currentWeight2 >= FULL_WEIGHT);
 
-    // 上传物模型属性：手机仓 / 数码配件仓 / 电池仓（当前同源）
-    bool uploadOk = oneNetMqttUploadProperties(binData, binData, binData);
+    BoxBinData binData = {currentWeight, pct, isFull};
+    BoxBinData binData2 = {currentWeight2, pct2, isFull2};
+
+    // 上传物模型属性：手机仓(HX711_1) / 数码配件仓(HX711_2) / 电池仓(暂用HX711_1)
+    bool uploadOk = oneNetMqttUploadProperties(binData, binData2, binData);
     if (uploadOk)
     {
       Serial.println("[MQTT] Properties uploaded OK");
