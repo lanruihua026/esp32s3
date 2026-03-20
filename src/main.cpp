@@ -7,14 +7,26 @@
 #include "buttonControl.h"
 #include "servoControl.h"
 #include "hx711_2.h"
+#include "hx711_3.h"
 #include "buzzer.h"
 // ===== 常量宏定义 =====
 #define Warnlight 6             // 告警灯 GPIO
 #define RGB_LED_PIN 38          // 板载 WS2812 RGB LED GPIO（ESP32-S3-DevKitM-1）
 #define RGB_LED_NUM 1           // 板载只有 1 颗
 #define FULL_WEIGHT 1000        // 实际满载阈值（g）：HX711量程5000g，设定最大载重1000g
-#define HX711_CAL_FACTOR 449.1f   // HX711 校准因子（raw/g）：以216g砝码校准（原始值1000×97/216≈449.1）
-#define HX711_CAL_FACTOR_2 449.1f // 第二个 HX711 校准因子（待独立校准，暂与第一个相同）
+// ===== HX711 校准因子（raw/g） =====
+// 校准公式：
+//   初次校准：calibration_factor = raw_net / known_weight
+//     其中 raw_net = 当前ADC原始均值 - 空载零点偏移(zero_offset)
+//     known_weight = 已知砝码重量(g)
+//     即：把已知重量的砝码放上去，用ADC净值除以砝码克数，得到每克对应的ADC值
+//   后续微调：new_factor = old_factor × (displayed_weight / actual_weight)
+//     displayed_weight = 当前传感器显示的重量(g)
+//     actual_weight    = 砝码实际重量(g)
+//     即：显示偏大则因子调大，显示偏小则因子调小
+#define HX711_CAL_FACTOR 447.0f   // 手机仓（初值449.1，微调：449.1×215/216）
+#define HX711_CAL_FACTOR_2 457.4f // 数码配件仓（初值449.1，微调：449.1×220/216）
+#define HX711_CAL_FACTOR_3 419.9f // 电池仓（初值449.1，微调：449.1×202/216）
 
 // 板载 RGB LED 驱动对象（上电即关闭，防止误点亮）
 static Adafruit_NeoPixel boardRgb(RGB_LED_NUM, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -55,10 +67,12 @@ static uint32_t lastWiFiRetryMs = 0;
 // 当前重量缓存（供 OLED 显示、告警判断、云上报复用）
 static int32_t currentWeight = 0;
 static int32_t currentWeight2 = 0; // 第二个 HX711 重量缓存
+static int32_t currentWeight3 = 0; // 第三个 HX711 重量缓存
 
 // 初始化与运行态健康状态缓存
 static bool g_hx711InitOk = false;
 static bool g_hx711_2InitOk = false;
+static bool g_hx711_3InitOk = false;
 static bool g_wifiInitTimeout = false;
 static bool g_wifiEverConnected = false;
 
@@ -251,6 +265,14 @@ void setup()
   setCalibrationFactor2(HX711_CAL_FACTOR_2);
   delay(100);
 
+  // 2.6) 第三个 HX711 初始化与校准
+  showBootProgress(38, "HX711_3 Sensor");
+  g_hx711_3InitOk = setupHX711_3();
+  delay(100);
+  showBootProgress(40, "HX711_3 Cal");
+  setCalibrationFactor3(HX711_CAL_FACTOR_3);
+  delay(100);
+
   // 3) WiFi 连接（40%~70%，最多等待 10 秒后继续进入系统）
   setInitModuleStatus(INIT_MODULE_WIFI, INIT_RUNNING, "Connecting");
   showBootProgress(40, "WiFi Connecting");
@@ -406,6 +428,7 @@ void loop()
     lastSampleMs = now;
     currentWeight = (int32_t)getWeight();
     currentWeight2 = (int32_t)getWeight2();
+    currentWeight3 = (int32_t)getWeight3();
     setCurrentWeight(currentWeight);
 
     // 满载点亮告警灯（含迟滞，避免阈值附近噪声导致闪烁）
@@ -429,7 +452,7 @@ void loop()
   {
     lastReportMs = now;
 
-    // 暂时第一个 HX711 用于手机仓，第二个 HX711 用于数码配件仓，电池仓暂用第一个
+    // 三个 HX711 分别对应三个仓位，各自独立计量
     // 百分比基于最大满溢重量1000g，满溢阈值 FULL_WEIGHT 独立判断
     float pct = (currentWeight * 100.0f) / 1000.0f;
     if (pct < 0.0f)
@@ -445,11 +468,19 @@ void loop()
       pct2 = 100.0f;
     bool isFull2 = (currentWeight2 >= FULL_WEIGHT);
 
+    float pct3 = (currentWeight3 * 100.0f) / 1000.0f;
+    if (pct3 < 0.0f)
+      pct3 = 0.0f;
+    if (pct3 > 100.0f)
+      pct3 = 100.0f;
+    bool isFull3 = (currentWeight3 >= FULL_WEIGHT);
+
     BoxBinData binData = {currentWeight, pct, isFull};
     BoxBinData binData2 = {currentWeight2, pct2, isFull2};
+    BoxBinData binData3 = {currentWeight3, pct3, isFull3};
 
-    // 上传物模型属性：手机仓(HX711_1) / 数码配件仓(HX711_2) / 电池仓(暂用HX711_1)
-    bool uploadOk = oneNetMqttUploadProperties(binData, binData2, binData);
+    // 上传物模型属性：手机仓(HX711_1) / 数码配件仓(HX711_2) / 电池仓(HX711_3)
+    bool uploadOk = oneNetMqttUploadProperties(binData, binData2, binData3);
     if (uploadOk)
     {
       Serial.println("[MQTT] Properties uploaded OK");
