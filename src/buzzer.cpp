@@ -1,35 +1,28 @@
 #include "buzzer.h"
-/**
- * @brief 初始化蜂鸣器
- * 触发方式：低电平触发
- */
+
 void buzzerInit()
 {
+    // 上电先配置为输出，并保持静音，防止误响。
     pinMode(BUZZER_PIN, OUTPUT);
-    digitalWrite(BUZZER_PIN, HIGH); // 初始状态关闭蜂鸣器
+    digitalWrite(BUZZER_PIN, HIGH);
 }
 
-/**
- * @brief 蜂鸣器发声
- * @param duration_ms 发声持续时间（毫秒）
- */
 void buzzerBeep(uint32_t duration_ms)
 {
-    digitalWrite(BUZZER_PIN, LOW);  // 打开蜂鸣器
-    delay(duration_ms);             // 持续指定时间
-    digitalWrite(BUZZER_PIN, HIGH); // 关闭蜂鸣器
+    // 用于需要“响一下”的场景，比如人工提示。
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(duration_ms);
+    digitalWrite(BUZZER_PIN, HIGH);
 }
-/**
- * @brief 蜂鸣器持续打开
- */
+
 void buzzerOn()
 {
-    digitalWrite(BUZZER_PIN, LOW); // 打开蜂鸣器
+    // 低电平表示持续鸣叫。
+    digitalWrite(BUZZER_PIN, LOW);
 }
-/**
- * @brief 蜂鸣器持续关闭
- */
+
 void buzzerOff()
 {
-    digitalWrite(BUZZER_PIN, HIGH); // 关闭蜂鸣器
+    // 高电平表示关闭蜂鸣器。
+    digitalWrite(BUZZER_PIN, HIGH);
 }

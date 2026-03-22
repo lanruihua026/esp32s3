@@ -1,491 +1,466 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
+#include <cstdlib>
+#include <cstring>
+
+#include "buttonControl.h"
+#include "buzzer.h"
 #include "connectToWiFi.h"
 #include "hx711.h"
-#include "oledInit.h"
-#include "onenetMqtt.h"
-#include "buttonControl.h"
-#include "servoControl.h"
 #include "hx711_2.h"
 #include "hx711_3.h"
-#include "buzzer.h"
-// ===== 常量宏定义 =====
-#define Warnlight 6      // 告警灯 GPIO
-#define RGB_LED_PIN 38   // 板载 WS2812 RGB LED GPIO（ESP32-S3-DevKitM-1）
-#define RGB_LED_NUM 1    // 板载只有 1 颗
-#define FULL_WEIGHT 1000 // 实际满载阈值（g）：HX711量程5000g，设定最大载重1000g
-// ===== HX711 校准因子（raw/g） =====
-// 校准公式：
-//   初次校准：calibration_factor = raw_net / known_weight
-//     其中 raw_net = 当前ADC原始均值 - 空载零点偏移(zero_offset)
-//     known_weight = 已知砝码重量(g)
-//     即：把已知重量的砝码放上去，用ADC净值除以砝码克数，得到每克对应的ADC值
-//   后续微调：new_factor = old_factor × (displayed_weight / actual_weight)
-//     displayed_weight = 当前传感器显示的重量(g)
-//     actual_weight    = 砝码实际重量(g)
-//     即：显示偏大则因子调大，显示偏小则因子调小
-#define HX711_CAL_FACTOR 447.0f   // 手机仓（初值449.1，微调：449.1×215/216）
-#define HX711_CAL_FACTOR_2 457.4f // 数码配件仓（初值449.1，微调：449.1×220/216）
-#define HX711_CAL_FACTOR_3 419.9f // 电池仓（初值449.1，微调：449.1×202/216）
+#include "oledInit.h"
+#include "onenetMqtt.h"
+#include "servoControl.h"
 
-// 板载 RGB LED 驱动对象（上电即关闭，防止误点亮）
-static Adafruit_NeoPixel boardRgb(RGB_LED_NUM, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
+namespace
+{
+// ===== 硬件资源定义 =====
+// 这里集中放引脚、时间参数、业务阈值，便于后续调试和统一修改。
+constexpr uint8_t WARNING_LIGHT_PIN = 6;
+constexpr uint8_t RGB_LED_PIN = 38;
+constexpr uint8_t RGB_LED_COUNT = 1;
 
-// ===== ESP32-CAM -> ESP32-S3 串口参数 =====
-// 接线说明：
-// 1) ESP32-CAM TX（1） -> ESP32-S3 RX（18）
-// 2) ESP32-CAM RX （3）<- ESP32-S3 TX（17）
-// 3) 两块板必须共地（GND 对 GND）
-static const int CAM_UART_RX_PIN = 18;
-static const int CAM_UART_TX_PIN = 17;
-static const uint32_t CAM_UART_BAUD = 115200;
+constexpr uint8_t CAM_UART_RX_PIN = 18;
+constexpr uint8_t CAM_UART_TX_PIN = 17;
+constexpr uint32_t CAM_UART_BAUD = 115200;
 
-// 串口对象：用于接收 ESP32-CAM 输出的识别结果。
+constexpr int32_t FULL_WEIGHT_G = 1000;
+constexpr int32_t WARNING_RELEASE_HYSTERESIS_G = 100;
+constexpr uint32_t WEIGHT_SAMPLE_INTERVAL_MS = 500;
+constexpr uint32_t PROPERTY_REPORT_INTERVAL_MS = 10000;
+constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;
+constexpr uint32_t WIFI_BOOT_WAIT_MS = 10000;
+
+constexpr float HX711_CAL_FACTOR_1 = 447.0f;
+constexpr float HX711_CAL_FACTOR_2 = 457.4f;
+constexpr float HX711_CAL_FACTOR_3 = 419.9f;
+
+constexpr const char *ONENET_PRODUCT_ID = "f45hkc7xC7";
+constexpr const char *ONENET_DEVICE_NAME = "Box1";
+constexpr const char *ONENET_BASE64_KEY = "T0R5ejYyM1JrT2VuczBkZllINmZuazRicEMxc29xcnk=";
+
+// 板载 RGB 仅用于上电后快速关闭，避免默认乱闪。
+Adafruit_NeoPixel boardRgb(RGB_LED_COUNT, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
+// UART1 用来接收 ESP32-CAM 识别结果。
 HardwareSerial CameraUart(1);
 
-// 串口接收缓存：按“逐字符收、按行解析”策略处理。
-static char g_camLineBuf[128] = {0};
-static size_t g_camLinePos = 0;
+// 摄像头串口是按“逐字节接收，按行解析”的方式处理的，
+// 这里是接收缓存区。
+char g_camLineBuf[128] = {0};
+size_t g_camLinePos = 0;
 
-// 最近一次模型识别结果缓存
-static bool g_lastAiDetected = false;   // 是否识别到目标
-static char g_lastAiLabel[32] = "none"; // 识别到的标签 默认"none" 即没有识别结果
-static float g_lastAiConf = 0.0f;       // 结果置信度 (0.0~1.0)
-static uint32_t g_lastAiUpdateMs = 0;   // 上次识别结果更新时间戳（ms），用于 OLED 显示过期状态
+// 最近一次 AI 识别结果缓存：
+// 供舵机分拣、OLED 显示使用。
+bool g_lastAiDetected = false;
+char g_lastAiLabel[32] = "none";
+float g_lastAiConf = 0.0f;
+uint32_t g_lastAiUpdateMs = 0;
 
-// ===== OneNET 设备身份 =====
-// 说明：这些信息需要与你在 OneNET 平台创建的产品/设备保持一致。
-static const char *ONENET_PRODUCT_ID = "f45hkc7xC7";
-static const char *ONENET_DEVICE_NAME = "Box1";
-static const char *ONENET_BASE64_KEY = "T0R5ejYyM1JrT2VuczBkZllINmZuazRicEMxc29xcnk=";
+// 三个仓位的最新重量缓存：
+// 供告警、OLED 页面、OneNET 上报复用。
+int32_t g_currentWeight1 = 0;
+int32_t g_currentWeight2 = 0;
+int32_t g_currentWeight3 = 0;
 
-// 定时任务时间戳
-static uint32_t lastReportMs = 0; // 上次上报属性时间
-static uint32_t lastSampleMs = 0; // 上次采样重量时间
-static uint32_t lastWiFiRetryMs = 0;
+// 周期任务时间戳：
+// 分别用于属性上报、重量采样、WiFi 断线重连。
+uint32_t g_lastReportMs = 0;
+uint32_t g_lastSampleMs = 0;
+uint32_t g_lastWiFiRetryMs = 0;
 
-// 当前重量缓存（供 OLED 显示、告警判断、云上报复用）
-static int32_t currentWeight = 0;
-static int32_t currentWeight2 = 0; // 第二个 HX711 重量缓存
-static int32_t currentWeight3 = 0; // 第三个 HX711 重量缓存
+// 启动阶段和运行阶段的状态缓存。
+bool g_hx711_1InitOk = false;
+bool g_hx711_2InitOk = false;
+bool g_hx711_3InitOk = false;
+bool g_wifiInitTimeout = false;
+bool g_warningActive = false;
 
-// 初始化与运行态健康状态缓存
-static bool g_hx711InitOk = false;
-static bool g_hx711_2InitOk = false;
-static bool g_hx711_3InitOk = false;
-static bool g_wifiInitTimeout = false;
-static bool g_wifiEverConnected = false;
-
-static void syncRuntimeHealth()
+// 将重量转换为百分比，范围限制在 0~100%，
+// 用于云平台物模型上报。
+float clampPercent(int32_t weight)
 {
-  bool wifiConnected = (WiFi.status() == WL_CONNECTED);
-  if (wifiConnected)
-  {
-    g_wifiEverConnected = true;
-    // 解决“启动阶段超时，稍后恢复成功”后状态仍显示错误的问题。
-    g_wifiInitTimeout = false;
-  }
-
-  bool mqttConnected = oneNetMqttConnected();
-  setRuntimeHealth(wifiConnected, g_wifiInitTimeout, g_hx711InitOk, mqttConnected);
+    float percent = (weight * 100.0f) / static_cast<float>(FULL_WEIGHT_G);
+    if (percent < 0.0f)
+    {
+        return 0.0f;
+    }
+    if (percent > 100.0f)
+    {
+        return 100.0f;
+    }
+    return percent;
 }
 
-/**
- * @brief 解析一行来自 ESP32-CAM 的协议消息。
- *
- * 协议约定：
- * - DET,<label>,<conf>   识别成功
- * - NONE                本帧无目标
- * - ERR,<msg>           摄像头端或网络端异常
- *
- * 说明：
- * 该函数只负责解析和更新本地状态，不阻塞。
- */
+bool allHx711Ready()
+{
+    return g_hx711_1InitOk && g_hx711_2InitOk && g_hx711_3InitOk;
+}
+
+// 将当前运行状态同步给 OLED 状态页。
+// WiFi 一旦后续恢复成功，会自动清除“启动超时”标记。
+void syncRuntimeHealth()
+{
+    const bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+    if (wifiConnected)
+    {
+        g_wifiInitTimeout = false;
+    }
+
+    setRuntimeHealth(wifiConnected, g_wifiInitTimeout, allHx711Ready(), oneNetMqttConnected());
+}
+
+void initBoardIndicators()
+{
+    // 先关掉上电后可能乱亮的灯和蜂鸣器，避免误判为故障。
+    boardRgb.begin();
+    boardRgb.setPixelColor(0, 0);
+    boardRgb.show();
+
+    pinMode(WARNING_LIGHT_PIN, OUTPUT);
+    digitalWrite(WARNING_LIGHT_PIN, LOW);
+
+    buzzerInit();
+    buzzerOff();
+}
+
+void initCameraUart()
+{
+    // 初始化与 ESP32-CAM 相连的串口，用来接收识别结果。
+    CameraUart.begin(CAM_UART_BAUD, SERIAL_8N1, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
+}
+
+void initOled()
+{
+    // OLED 放在前面初始化，后续模块启动进度都显示在这里。
+    resetInitModuleStatus();
+    setInitModuleStatus(INIT_MODULE_OLED, INIT_RUNNING, "Init");
+    setupOLED();
+    setInitModuleStatus(INIT_MODULE_OLED, isOLEDReady() ? INIT_OK : INIT_ERROR, isOLEDReady() ? "Ready" : "Fail");
+    setFullWeight(FULL_WEIGHT_G);
+}
+
+void initHx711Modules()
+{
+    // 依次初始化三路重量传感器，并写入各自校准系数。
+    // 三路全部可用才认为称重模块整体正常。
+    setInitModuleStatus(INIT_MODULE_HX711, INIT_RUNNING, "Probe");
+
+    showBootProgress(20, "HX711_1");
+    g_hx711_1InitOk = setupHX711();
+    showBootProgress(28, "HX711_1 Cal");
+    setCalibrationFactor(HX711_CAL_FACTOR_1);
+
+    showBootProgress(32, "HX711_2");
+    g_hx711_2InitOk = setupHX711_2();
+    showBootProgress(36, "HX711_2 Cal");
+    setCalibrationFactor2(HX711_CAL_FACTOR_2);
+
+    showBootProgress(38, "HX711_3");
+    g_hx711_3InitOk = setupHX711_3();
+    showBootProgress(40, "HX711_3 Cal");
+    setCalibrationFactor3(HX711_CAL_FACTOR_3);
+
+    setInitModuleStatus(INIT_MODULE_HX711, allHx711Ready() ? INIT_OK : INIT_ERROR, allHx711Ready() ? "Ready" : "Check");
+}
+
+void initWiFiWithTimeout()
+{
+    // WiFi 允许在启动阶段等待一段时间，
+    // 超时也继续进入系统，避免整机卡死在联网阶段。
+    setInitModuleStatus(INIT_MODULE_WIFI, INIT_RUNNING, "Connecting");
+    showBootProgress(45, "WiFi");
+    setupWiFi();
+
+    const uint32_t startMs = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - startMs) < WIFI_BOOT_WAIT_MS)
+    {
+        delay(200);
+        const uint32_t elapsed = millis() - startMs;
+        const uint8_t progress = 45 + static_cast<uint8_t>((elapsed * 20UL) / WIFI_BOOT_WAIT_MS);
+        showBootProgress(progress, "WiFi");
+    }
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        g_wifiInitTimeout = false;
+        setInitModuleStatus(INIT_MODULE_WIFI, INIT_OK, "Connected");
+        showBootProgress(65, "WiFi Ready");
+    }
+    else
+    {
+        g_wifiInitTimeout = true;
+        setInitModuleStatus(INIT_MODULE_WIFI, INIT_TIMEOUT, "10s timeout");
+        showBootProgress(65, "WiFi Timeout");
+    }
+}
+
+void initServoModule()
+{
+    // 舵机属于执行器，放在网络之后初始化，
+    // 这样供电更稳定，且自检动作更容易观察。
+    setInitModuleStatus(INIT_MODULE_SERVO, INIT_RUNNING, "SelfTest");
+    showBootProgress(72, "Servo");
+    initServo();
+    runServoSelfTest();
+    setInitModuleStatus(INIT_MODULE_SERVO, INIT_OK, "Ready");
+}
+
+void initButtons()
+{
+    // 按键只负责切换 OLED 页面，不参与核心控制逻辑。
+    setInitModuleStatus(INIT_MODULE_BUTTON, INIT_RUNNING, "IRQ");
+    showBootProgress(84, "Buttons");
+    setupButtons();
+    setButton1Callback([]() { prevOledPage(); });
+    setButton2Callback([]() { toggleOledPage(); });
+    setInitModuleStatus(INIT_MODULE_BUTTON, INIT_OK, "Ready");
+}
+
+void initMqtt()
+{
+    // MQTT 这里只做参数配置，真正连接在 loop() 中由 oneNetMqttLoop() 维护。
+    setInitModuleStatus(INIT_MODULE_MQTT, INIT_RUNNING, "Config");
+    showBootProgress(92, "OneNET");
+
+    const OneNetMqttConfig cfg = {
+        "mqtts.heclouds.com",
+        1883,
+        ONENET_PRODUCT_ID,
+        ONENET_DEVICE_NAME,
+        ONENET_BASE64_KEY,
+        1893456000,
+        OneNetSignMethod::SHA256};
+
+    oneNetMqttBegin(cfg);
+    setInitModuleStatus(INIT_MODULE_MQTT, INIT_OK, "Ready");
+}
+
+void initTimers()
+{
+    // 所有周期任务都从系统启动完成时开始计时。
+    const uint32_t now = millis();
+    g_lastReportMs = now;
+    g_lastSampleMs = now;
+    g_lastWiFiRetryMs = now;
+}
+
+void setAiState(bool detected, const char *label, float conf)
+{
+    // 统一更新 AI 识别缓存，避免串口解析逻辑和显示逻辑分散。
+    g_lastAiDetected = detected;
+    g_lastAiConf = conf;
+    g_lastAiUpdateMs = millis();
+
+    strncpy(g_lastAiLabel, label, sizeof(g_lastAiLabel) - 1);
+    g_lastAiLabel[sizeof(g_lastAiLabel) - 1] = '\0';
+
+    setAiResult(detected, g_lastAiLabel, g_lastAiConf, g_lastAiUpdateMs);
+}
+
 void parseCameraLine(const char *line)
 {
-  if (line == nullptr || line[0] == '\0')
-  {
-    return;
-  }
-
-  // 1) 识别成功消息：DET,label,conf
-  if (strncmp(line, "DET,", 4) == 0)
-  {
-    const char *p1 = strchr(line, ',');
-    if (!p1)
+    // ESP32-CAM 当前串口协议：
+    // 1. DET,<label>,<conf> 识别到目标
+    // 2. NONE               当前帧没有目标
+    // 3. ERR,<msg>          摄像头侧或网络侧异常
+    if (line == nullptr || line[0] == '\0')
     {
-      return;
-    }
-    const char *p2 = strchr(p1 + 1, ',');
-    if (!p2)
-    {
-      return;
+        return;
     }
 
-    // 提取 label（第二段）
-    size_t labelLen = static_cast<size_t>(p2 - (p1 + 1));
-    if (labelLen >= sizeof(g_lastAiLabel))
+    if (strncmp(line, "DET,", 4) == 0)
     {
-      labelLen = sizeof(g_lastAiLabel) - 1;
+        const char *p1 = strchr(line, ',');
+        const char *p2 = p1 ? strchr(p1 + 1, ',') : nullptr;
+        if (!p1 || !p2)
+        {
+            return;
+        }
+
+        char label[sizeof(g_lastAiLabel)] = {0};
+        size_t labelLen = static_cast<size_t>(p2 - (p1 + 1));
+        if (labelLen >= sizeof(label))
+        {
+            labelLen = sizeof(label) - 1;
+        }
+        memcpy(label, p1 + 1, labelLen);
+
+        setAiState(true, label, static_cast<float>(atof(p2 + 1)));
+        return;
     }
-    memcpy(g_lastAiLabel, p1 + 1, labelLen);
-    g_lastAiLabel[labelLen] = '\0';
 
-    // 提取 conf（第三段）
-    g_lastAiConf = atof(p2 + 1);
-    g_lastAiDetected = true;
-    g_lastAiUpdateMs = millis();
+    if (strcmp(line, "NONE") == 0)
+    {
+        setAiState(false, "none", 0.0f);
+        return;
+    }
 
-    // 同步更新 OLED 模块的 AI 识别结果缓存
-    setAiResult(true, g_lastAiLabel, g_lastAiConf, g_lastAiUpdateMs);
-
-    // Serial.printf("[CAM-UART] DET label=%s conf=%.3f\n", g_lastAiLabel, g_lastAiConf);
-    return;
-  }
-
-  // 2) 无目标消息
-  if (strcmp(line, "NONE") == 0)
-  {
-    g_lastAiDetected = false;
-    strncpy(g_lastAiLabel, "none", sizeof(g_lastAiLabel) - 1);
-    g_lastAiLabel[sizeof(g_lastAiLabel) - 1] = '\0';
-    g_lastAiConf = 0.0f;
-    g_lastAiUpdateMs = millis();
-
-    // 同步更新 OLED 缓存
-    setAiResult(false, "none", 0.0f, g_lastAiUpdateMs);
-
-    // Serial.println("[CAM-UART] NONE");
-    return;
-  }
-
-  // 3) 异常消息
-  if (strncmp(line, "ERR,", 4) == 0)
-  {
-    g_lastAiDetected = false;
-    g_lastAiUpdateMs = millis();
-
-    // 异常时也更新 OLED 缓存
-    setAiResult(false, "ERR", 0.0f, g_lastAiUpdateMs);
-    // Serial.printf("[CAM-UART] %s\n", line);
-    return;
-  }
-
-  // 4) 其他噪声行：打印出来便于调试，但不影响业务主流程。
-  // Serial.printf("[CAM-UART] Unknown line: %s\n", line);
+    if (strncmp(line, "ERR,", 4) == 0)
+    {
+        setAiState(false, "ERR", 0.0f);
+        Serial.printf("[CAM] %s\n", line);
+    }
 }
 
-/**
- * @brief 持续读取串口并按“换行符”切分消息。
- *
- * 实现细节：
- * 1. 逐字节读取，遇到 '\n' 触发一条完整消息解析。
- * 2. 忽略 '\r'，兼容 CRLF 与 LF。
- * 3. 超长行自动丢弃并复位，防止缓存溢出。
- */
 void pollCameraUart()
 {
-  while (CameraUart.available())
-  {
-    char c = static_cast<char>(CameraUart.read());
+    // 持续读取摄像头串口。
+    // 读到换行就认为收到一条完整消息，交给 parseCameraLine() 解析。
+    while (CameraUart.available())
+    {
+        const char c = static_cast<char>(CameraUart.read());
+        if (c == '\r')
+        {
+            continue;
+        }
 
-    if (c == '\r')
-    {
-      continue;
-    }
+        if (c == '\n')
+        {
+            g_camLineBuf[g_camLinePos] = '\0';
+            parseCameraLine(g_camLineBuf);
+            g_camLinePos = 0;
+            continue;
+        }
 
-    if (c == '\n')
-    {
-      g_camLineBuf[g_camLinePos] = '\0';
-      parseCameraLine(g_camLineBuf);
-      g_camLinePos = 0;
-      continue;
+        if (g_camLinePos < sizeof(g_camLineBuf) - 1)
+        {
+            g_camLineBuf[g_camLinePos++] = c;
+        }
+        else
+        {
+            g_camLinePos = 0;
+        }
     }
-
-    if (g_camLinePos < sizeof(g_camLineBuf) - 1)
-    {
-      g_camLineBuf[g_camLinePos++] = c;
-    }
-    else
-    {
-      // 若接收行过长，直接清空，避免内存越界。
-      g_camLinePos = 0;
-    }
-  }
 }
 
-/**
- * @brief Arduino 初始化入口，系统上电后执行一次
- *
- * 初始化顺序：
- * 1. Serial / CameraUart 串口
- * 2. OLED 显示屏（含启动进度动画）
- * 3. HX711 传感器及校准因子设置
- * 4. WiFi 连接（带进度推进动画）
- * 5. 告警灯 GPIO
- * 6. 按键中断及页面切换回调
- * 7. OneNET MQTT 配置（实际连接延后到 loop()）
- */
-void setup()
+int servoAngleForLabel(const char *label)
 {
-  Serial.begin(115200);
-
-  // 关闭板载 RGB LED，防止上电随机点亮
-  boardRgb.begin();
-  boardRgb.setPixelColor(0, 0); // 黑色 = 关闭
-  boardRgb.show();
-
-  // 初始化来自 ESP32-CAM 的串口通道。
-  CameraUart.begin(CAM_UART_BAUD, SERIAL_8N1, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
-  // Serial.printf("[CAM-UART] Init done, baud=%u RX=%d TX=%d\n", CAM_UART_BAUD, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
-
-  // 1) OLED 初始化，并显示开机进度框架
-  resetInitModuleStatus();
-  setInitModuleStatus(INIT_MODULE_OLED, INIT_RUNNING, "Init");
-  setupOLED();
-  setInitModuleStatus(INIT_MODULE_OLED, isOLEDReady() ? INIT_OK : INIT_ERROR, isOLEDReady() ? "Ready" : "Fail");
-  setFullWeight(FULL_WEIGHT); // 将满载阈值传入 OLED 模块
-
-  // 2) HX711 初始化与校准参数设置（20%~40%）
-  setInitModuleStatus(INIT_MODULE_HX711, INIT_RUNNING, "Probe");
-  showBootProgress(20, "HX711 Sensor");
-  g_hx711InitOk = setupHX711();
-  setInitModuleStatus(INIT_MODULE_HX711, g_hx711InitOk ? INIT_OK : INIT_ERROR, g_hx711InitOk ? "Ready" : "Timeout");
-  delay(100);
-
-  showBootProgress(30, "Calibration");
-  setCalibrationFactor(HX711_CAL_FACTOR);
-  delay(100);
-
-  // 2.5) 第二个 HX711 初始化与校准
-  showBootProgress(33, "HX711_2 Sensor");
-  g_hx711_2InitOk = setupHX711_2();
-  delay(100);
-  showBootProgress(36, "HX711_2 Cal");
-  setCalibrationFactor2(HX711_CAL_FACTOR_2);
-  delay(100);
-
-  // 2.6) 第三个 HX711 初始化与校准
-  showBootProgress(38, "HX711_3 Sensor");
-  g_hx711_3InitOk = setupHX711_3();
-  delay(100);
-  showBootProgress(40, "HX711_3 Cal");
-  setCalibrationFactor3(HX711_CAL_FACTOR_3);
-  delay(100);
-
-  // 3) WiFi 连接（40%~70%，最多等待 10 秒后继续进入系统）
-  setInitModuleStatus(INIT_MODULE_WIFI, INIT_RUNNING, "Connecting");
-  showBootProgress(40, "WiFi Connecting");
-  setupWiFi();
-
-  const uint32_t wifiWaitStartMs = millis();
-  const uint32_t wifiWaitWindowMs = 10000;
-  while (WiFi.status() != WL_CONNECTED && (millis() - wifiWaitStartMs) < wifiWaitWindowMs)
-  {
-    delay(200);
-    uint32_t elapsed = millis() - wifiWaitStartMs;
-    uint8_t wifiProgress = 40 + (uint8_t)((elapsed * 25UL) / wifiWaitWindowMs);
-    showBootProgress(wifiProgress, "WiFi Connecting");
-  }
-
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    g_wifiEverConnected = true;
-    g_wifiInitTimeout = false;
-    setInitModuleStatus(INIT_MODULE_WIFI, INIT_OK, "Connected");
-    showBootProgress(70, "WiFi Connected");
-  }
-  else
-  {
-    g_wifiInitTimeout = true;
-    setInitModuleStatus(INIT_MODULE_WIFI, INIT_TIMEOUT, "10s timeout");
-    showBootProgress(70, "WiFi Timeout");
-  }
-  delay(200);
-
-  // 舵机初始化放在 WiFi 之后，供电更稳定，避免 attach 后立刻 write 造成电流冲击
-  setInitModuleStatus(INIT_MODULE_SERVO, INIT_RUNNING, "Attach");
-  showBootProgress(75, "Servo Init");
-  initServo();
-  setServoAngle(0);
-  setInitModuleStatus(INIT_MODULE_SERVO, INIT_OK, "Ready");
-
-  // 4) 告警灯 GPIO 初始化（70%~80%）
-  showBootProgress(78, "Warning Light");
-  pinMode(Warnlight, OUTPUT);
-  delay(100);
-
-  // 蜂鸣器初始化
-  buzzerInit();
-  showBootProgress(82, "Buzzer");
-  delay(100);
-
-  // 5) 按键初始化，并注册回调
-  setInitModuleStatus(INIT_MODULE_BUTTON, INIT_RUNNING, "IRQ");
-  showBootProgress(86, "Buttons");
-  setupButtons();
-  setButton1Callback([]()
-                     { prevOledPage(); }); // 按键1：向左翻页
-  setButton2Callback([]()
-                     { toggleOledPage(); }); // 按键2：向右翻页
-  setInitModuleStatus(INIT_MODULE_BUTTON, INIT_OK, "Ready");
-  delay(100);
-
-  // 7) OneNET MQTT 初始化（86%~100%）
-  // 注意：这里只做配置，真实连接在 loop() 内由 oneNetMqttLoop 自动完成。
-  setInitModuleStatus(INIT_MODULE_MQTT, INIT_RUNNING, "Config");
-  showBootProgress(90, "OneNET MQTT");
-  OneNetMqttConfig cfg = {
-      "mqtts.heclouds.com",
-      1883,
-      ONENET_PRODUCT_ID,
-      ONENET_DEVICE_NAME,
-      ONENET_BASE64_KEY,
-      1893456000,
-      OneNetSignMethod::SHA256};
-  oneNetMqttBegin(cfg);
-  setInitModuleStatus(INIT_MODULE_MQTT, INIT_OK, "Ready");
-
-  showBootProgress(95, "System Ready");
-  delay(200);
-  showBootProgress(100, "Starting...");
-  delay(300);
-
-  // 初始化定时器
-  lastReportMs = millis();
-  lastSampleMs = millis();
-  lastWiFiRetryMs = millis();
-  syncRuntimeHealth();
-  Serial.println("Setup complete");
+    // 将识别类别映射到舵机角度，本质上就是“不同垃圾 -> 不同仓位”。
+    if (strcmp(label, "MobilePhone") == 0)
+    {
+        return 0;
+    }
+    if (strcmp(label, "Charger") == 0)
+    {
+        return 45;
+    }
+    if (strcmp(label, "Battery") == 0)
+    {
+        return 90;
+    }
+    if (strcmp(label, "Earphone") == 0)
+    {
+        return 180;
+    }
+    return 0;
 }
 
-/**
- * @brief Arduino 主循环，持续执行
- *
- * 每帧执行顺序：
- * 1. pollCameraUart()   — 接收并解析 ESP32-CAM 串口数据
- * 2. pollButtons()      — 消抖处理按键并触发回调
- * 3. oneNetMqttLoop()   — 维护 MQTT 连接、保活与自动重连
- * 4. updateOLEDDisplay() — 刷新 OLED 当前页面
- * 5. 每 500ms 采样一次重量，更新告警灯
- * 6. 每 10s 向 OneNET 上报一次物模型属性（仅 MQTT 已连接时）
- */
-void loop()
+void updateServoByAiResult()
 {
-  uint32_t now = millis();
+    // 识别到目标时按类别转到对应仓位；
+    // 没识别到时让舵机回到默认位置。
+    setServoAngle(g_lastAiDetected ? servoAngleForLabel(g_lastAiLabel) : 0);
+}
 
-  // 先处理来自摄像头的识别串口数据，保证消息不会堆积。
-  pollCameraUart();
-  // 上一步已经完成识别，根据识别结果旋转舵机角度
-  if (g_lastAiDetected)
-  {
-    if (strcmp(g_lastAiLabel, "MobilePhone") == 0)
-    {
-      setServoAngle(0); // 手机仓
-    }
-    else if (strcmp(g_lastAiLabel, "Charger") == 0)
-    {
-      setServoAngle(45); // 充电器仓
-    }
-    else if (strcmp(g_lastAiLabel, "Battery") == 0)
-    {
-      setServoAngle(90); // 电池仓
-    }
-    else if (strcmp(g_lastAiLabel, "Earphone") == 0)
-    {
-      setServoAngle(135); // 耳机仓
-    }
-    else
-    {
-      setServoAngle(0); // 默认角度
-    }
-  }
-  else
-  {
-    setServoAngle(0); // 默认角度
-  }
-  // 按键轮询，消抖并且是下降沿触发回调
-  pollButtons();
+void updateWeightsAndAlarm()
+{
+    // 周期读取三路称重值，并同步到 OLED。
+    // 目前告警只针对 1 号仓位：超阈值亮灯并鸣叫，低于回差后解除。
+    g_currentWeight1 = static_cast<int32_t>(getWeight());
+    g_currentWeight2 = static_cast<int32_t>(getWeight2());
+    g_currentWeight3 = static_cast<int32_t>(getWeight3());
 
-  // 若 WiFi 仍未连上，按固定周期主动重试一次，避免长期停留在离线状态。
-  if (WiFi.status() != WL_CONNECTED && now - lastWiFiRetryMs >= 15000)
-  {
-    lastWiFiRetryMs = now;
+    setCurrentWeights(g_currentWeight1, g_currentWeight2, g_currentWeight3);
+
+    if (!g_warningActive && g_currentWeight1 >= FULL_WEIGHT_G)
+    {
+        g_warningActive = true;
+        digitalWrite(WARNING_LIGHT_PIN, HIGH);
+        buzzerOn();
+    }
+    else if (g_warningActive && g_currentWeight1 < (FULL_WEIGHT_G - WARNING_RELEASE_HYSTERESIS_G))
+    {
+        g_warningActive = false;
+        digitalWrite(WARNING_LIGHT_PIN, LOW);
+        buzzerOff();
+    }
+}
+
+void tryReconnectWiFi(uint32_t now)
+{
+    // 启动后如果 WiFi 断开，按固定周期重试，避免频繁重连。
+    if (WiFi.status() == WL_CONNECTED || (now - g_lastWiFiRetryMs) < WIFI_RETRY_INTERVAL_MS)
+    {
+        return;
+    }
+
+    g_lastWiFiRetryMs = now;
     WiFi.disconnect(false, false);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  }
+}
 
-  // 维护 MQTT 连接、收发和自动重连
-  oneNetMqttLoop();
-
-  // 同步 OLED 运行态健康状态（WiFi 后续成功会自动清除启动期超时错误）。
-  syncRuntimeHealth();
-
-  // 持续刷新 OLED 综合状态页
-  updateOLEDDisplay();
-
-  // 每 500ms 采样一次重量
-  if (now - lastSampleMs >= 500)
-  {
-    lastSampleMs = now;
-    currentWeight = (int32_t)getWeight();
-    currentWeight2 = (int32_t)getWeight2();
-    currentWeight3 = (int32_t)getWeight3();
-    setCurrentWeights(currentWeight, currentWeight2, currentWeight3);
-
-    // 满载点亮告警灯（含迟滞，避免阈值附近噪声导致闪烁）
-    static bool s_warningOn = false;
-    if (!s_warningOn && currentWeight >= FULL_WEIGHT)
+void uploadPropertiesIfNeeded(uint32_t now)
+{
+    // 周期把三路重量、百分比、是否满载上传到 OneNET。
+    // 只有 MQTT 已连接时才会执行上报。
+    if (!oneNetMqttConnected() || (now - g_lastReportMs) < PROPERTY_REPORT_INTERVAL_MS)
     {
-      s_warningOn = true;
-      digitalWrite(Warnlight, HIGH);
-      buzzerOn(); // 满载时持续打开蜂鸣器
+        return;
     }
-    else if (s_warningOn && currentWeight < FULL_WEIGHT - 100)
+
+    g_lastReportMs = now;
+
+    const BoxBinData bin1 = {g_currentWeight1, clampPercent(g_currentWeight1), g_currentWeight1 >= FULL_WEIGHT_G};
+    const BoxBinData bin2 = {g_currentWeight2, clampPercent(g_currentWeight2), g_currentWeight2 >= FULL_WEIGHT_G};
+    const BoxBinData bin3 = {g_currentWeight3, clampPercent(g_currentWeight3), g_currentWeight3 >= FULL_WEIGHT_G};
+
+    oneNetMqttUploadProperties(bin1, bin2, bin3);
+}
+} // namespace
+
+void setup()
+{
+    Serial.begin(115200);
+
+    // 初始化顺序遵循嵌入式常见思路：
+    // 先基础外设，再显示，再传感器，再网络，再执行器，最后云端和交互。
+    initBoardIndicators();
+    initCameraUart();
+    initOled();
+    initHx711Modules();
+    initWiFiWithTimeout();
+    initServoModule();
+    initButtons();
+    initMqtt();
+
+    showBootProgress(100, "Starting");
+    delay(200);
+
+    initTimers();
+    syncRuntimeHealth();
+    Serial.println("System ready");
+}
+
+void loop()
+{
+    const uint32_t now = millis();
+
+    // 主循环按“先采集输入，再更新执行器，最后处理周期任务”组织。
+    pollCameraUart();
+    updateServoByAiResult();
+    pollButtons();
+
+    tryReconnectWiFi(now);
+    oneNetMqttLoop();
+    syncRuntimeHealth();
+    updateOLEDDisplay();
+
+    if ((now - g_lastSampleMs) >= WEIGHT_SAMPLE_INTERVAL_MS)
     {
-      s_warningOn = false;
-      digitalWrite(Warnlight, LOW);
-      buzzerOff(); // 停止蜂鸣器
+        g_lastSampleMs = now;
+        updateWeightsAndAlarm();
     }
-  }
 
-  // 每 10 秒上报一次属性（仅在 MQTT 已连接时执行）
-  if (oneNetMqttConnected() && now - lastReportMs >= 10000)
-  {
-    lastReportMs = now;
-
-    // 三个 HX711 分别对应三个仓位，各自独立计量
-    // 百分比基于最大满溢重量1000g，满溢阈值 FULL_WEIGHT 独立判断
-    float pct = (currentWeight * 100.0f) / 1000.0f;
-    if (pct < 0.0f)
-      pct = 0.0f;
-    if (pct > 100.0f)
-      pct = 100.0f;
-    bool isFull = (currentWeight >= FULL_WEIGHT);
-
-    float pct2 = (currentWeight2 * 100.0f) / 1000.0f;
-    if (pct2 < 0.0f)
-      pct2 = 0.0f;
-    if (pct2 > 100.0f)
-      pct2 = 100.0f;
-    bool isFull2 = (currentWeight2 >= FULL_WEIGHT);
-
-    float pct3 = (currentWeight3 * 100.0f) / 1000.0f;
-    if (pct3 < 0.0f)
-      pct3 = 0.0f;
-    if (pct3 > 100.0f)
-      pct3 = 100.0f;
-    bool isFull3 = (currentWeight3 >= FULL_WEIGHT);
-
-    BoxBinData binData = {currentWeight, pct, isFull};
-    BoxBinData binData2 = {currentWeight2, pct2, isFull2};
-    BoxBinData binData3 = {currentWeight3, pct3, isFull3};
-
-    // 上传物模型属性：手机仓(HX711_1) / 数码配件仓(HX711_2) / 电池仓(HX711_3)
-    bool uploadOk = oneNetMqttUploadProperties(binData, binData2, binData3);
-    if (uploadOk)
-    {
-      Serial.println("[MQTT] Properties uploaded OK");
-    }
-  }
+    uploadPropertiesIfNeeded(now);
 }

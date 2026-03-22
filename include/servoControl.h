@@ -8,5 +8,6 @@
 
 void initServo();
 void setServoAngle(int angle);
+void runServoSelfTest();
 
 #endif

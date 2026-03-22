@@ -1,23 +1,43 @@
 #include "servoControl.h"
 
-Servo servo; // 创建舵机对象
+// 全局舵机对象：
+// 负责驱动垃圾桶分拣机构转到指定角度。
+Servo servo;
 
-/**
- * @brief 初始化舵机
- * 说明：该函数在 setup() 中被调用，负责连接舵机到指定 GPIO 引脚，并进行必要的配置。
- * 注意：确保 SERVO_PIN 定义的引脚支持 PWM 输出，并且连接正确。
- */
 void initServo()
 {
-    servo.attach(SERVO_PIN); // 连接舵机到指定引脚
+    // 将舵机挂接到指定引脚，并先回到默认位置。
+    servo.attach(SERVO_PIN);
+    setServoAngle(0);
 }
-
-/**
- * @brief 设置舵机角度
- * @param angle 角度值（0-180）
- */
 
 void setServoAngle(int angle)
 {
-    servo.write(angle); // 设置舵机角度
+    // 对角度做边界保护，避免传入非法值导致舵机动作异常。
+    if (angle < 0)
+    {
+        angle = 0;
+    }
+    else if (angle > 180)
+    {
+        angle = 180;
+    }
+
+    servo.write(angle);
+}
+
+void runServoSelfTest()
+{
+    // 开机自检动作：
+    // 让舵机从默认位置转到中间角度，再回到原位，
+    // 便于观察供电、驱动和机械结构是否正常。
+    const int testAngle = 90;
+    const uint16_t settleMs = 450;
+
+    setServoAngle(0);
+    delay(settleMs);
+    setServoAngle(testAngle);
+    delay(settleMs);
+    setServoAngle(0);
+    delay(settleMs);
 }

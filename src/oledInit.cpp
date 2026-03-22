@@ -4,6 +4,9 @@
 
 Adafruit_SH1106G oledDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
+// OLED 模块负责两类显示：
+// 1. 开机初始化进度；
+// 2. 运行过程中的系统状态、三仓重量、AI 识别结果。
 static bool g_oledReady = false;
 
 // ===== 运行态显示所需共享状态 =====
@@ -12,7 +15,8 @@ static int32_t currentWeight2 = 0; // 2号仓当前重量（g）
 static int32_t currentWeight3 = 0; // 3号仓当前重量（g）
 static int32_t fullWeight = 1000;  // 满载阈值（g），由 main.cpp 通过 setFullWeight() 初始化
 
-// ===== Dirty flag 机制：仅在数据变化时重绘，彻底消除无意义清屏闪烁 =====
+// Dirty flag 机制：
+// 只有数据变化时才重绘，避免 OLED 不停清屏导致闪烁。
 static bool g_displayDirty = true; // 初始强制绘制一次
 
 // ===== OLED 页面管理 =====
@@ -57,6 +61,7 @@ static const char *moduleStatusText(InitModuleStatus status)
 
 void setRuntimeHealth(bool wifiOk, bool wifiInitTimeout, bool hx711Ok, bool mqttOk)
 {
+    // 主页面显示的是“运行状态摘要”，这里只负责同步缓存。
     if (g_wifiOk != wifiOk || g_wifiInitTimeout != wifiInitTimeout || g_hx711Ok != hx711Ok || g_mqttOk != mqttOk)
     {
         g_wifiOk = wifiOk;
@@ -152,12 +157,14 @@ void toggleOledPage()
 
 void prevOledPage()
 {
+    // 与 toggleOledPage() 相反，向左翻页。
     g_oledPage = (g_oledPage + 2) % 3;
     g_displayDirty = true;
 }
 
 void resetInitModuleStatus()
 {
+    // 系统重新启动时，所有模块状态先回到“等待初始化”。
     for (uint8_t i = 0; i < INIT_MODULE_COUNT; ++i)
     {
         g_initStatus[i] = INIT_PENDING;
@@ -167,6 +174,7 @@ void resetInitModuleStatus()
 
 void setInitModuleStatus(InitModuleId module, InitModuleStatus status, const char *detail)
 {
+    // setup() 每完成一个模块初始化，就会调用这里刷新开机进度页。
     if (module >= INIT_MODULE_COUNT)
     {
         return;
@@ -199,7 +207,15 @@ static void showAiResultPage()
     oledDisplay.setCursor(0, 0);
     oledDisplay.println("===Detected Result===");
 
-    if (g_aiDetected)
+    // 最近 3 秒内识别过目标时，页面继续保留“Detected”状态，
+    // 避免摄像头偶发一帧没识别到就把结果立刻清掉。
+    static const uint32_t AI_PERSIST_MS = 3000;
+    bool showDetected = g_aiDetected ||
+                        (g_aiUpdateMs > 0 &&
+                         (millis() - g_aiUpdateMs) < AI_PERSIST_MS &&
+                         strcmp(g_aiLabel, "none") != 0);
+
+    if (showDetected)
     {
         // 反显 Detected 状态，醒目显示识别成功
         oledDisplay.setCursor(0, 11);
@@ -231,7 +247,7 @@ static void showAiResultPage()
         oledDisplay.println("Conf:  --");
     }
 
-    // 上次更新距今时间
+    // 显示“距离上次识别过了多久”，便于判断当前结果是不是旧数据。
     oledDisplay.setCursor(0, 45);
     if (g_aiUpdateMs == 0)
     {
@@ -269,6 +285,8 @@ static void showBinWeightPage()
     oledDisplay.setCursor(0, 0);
     oledDisplay.println("=== Bin Weights ===");
 
+    // 三个仓位逐行显示，格式统一为：
+    // 仓位编号 + 当前重量 + 百分比 + 是否满载。
     const int32_t weights[3] = {currentWeight1, currentWeight2, currentWeight3};
     const uint8_t linesY[3] = {14, 28, 42};
 
@@ -309,6 +327,7 @@ static void showSystemStatusPage()
     oledDisplay.setCursor(0, 0);
     oledDisplay.println("=== System Status ===");
 
+    // 这页主要给调试和答辩演示用，快速看出网络、称重、云连接是否正常。
     oledDisplay.setCursor(0, 11);
     oledDisplay.print("WiFi : ");
     oledDisplay.println(g_wifiOk ? "OK" : (g_wifiInitTimeout ? "ERROR" : "PENDING"));
@@ -335,9 +354,9 @@ static void showSystemStatusPage()
  * @brief 刷新 OLED 显示内容（在 loop() 中持续调用）
  *
  * 说明：
- * 1. 按固定周期（ANIMATION_INTERVAL）推进上传动画帧计数。
- * 2. 根据 g_oledPage 分支调用对应页面的绘制函数。
- * 3. 本函数无阻塞，适合在主循环每帧调用。
+ * 1. 判断当前是否真的需要刷新页面。
+ * 2. 根据当前页号选择显示系统状态、重量或识别结果。
+ * 3. 本函数无阻塞，适合在 loop() 中持续调用。
  */
 void updateOLEDDisplay()
 {
@@ -346,14 +365,22 @@ void updateOLEDDisplay()
         return;
     }
 
-    // 仅在数据变化时重绘，避免无意义的 clearDisplay+display 造成闪烁
-    if (!g_displayDirty)
+    // AI 识别结果页在“结果保留倒计时”阶段需要持续刷新，
+    // 其他页面继续依赖 dirty flag 节流即可。
+    static const uint32_t AI_PERSIST_MS = 3000;
+    bool inAiPersist = (g_oledPage == 2) &&
+                       !g_aiDetected &&
+                       (g_aiUpdateMs > 0) &&
+                       ((millis() - g_aiUpdateMs) < AI_PERSIST_MS) &&
+                       (strcmp(g_aiLabel, "none") != 0);
+
+    if (!g_displayDirty && !inAiPersist)
     {
         return;
     }
     g_displayDirty = false;
 
-    // 根据当前选中页面分支显示
+    // 根据当前页号切换显示内容。
     if (g_oledPage == 0)
     {
         showSystemStatusPage();
@@ -370,9 +397,10 @@ void updateOLEDDisplay()
 /**
  * @brief 显示系统启动进度
  * @param progress 进度百分比（0~100）
- * @param statusText 当前阶段状态文本（如 "WiFi Connecting"）
- * 说明：这个函数在 setup() 中被调用，展示系统启动的各个阶段，提升用户体验和调试便利性。
- 进度条设计为 10%~100%，每个阶段占约 10%~20%，具体分配可根据实际启动流程调整。
+ * @param statusText 当前阶段文本
+ * 业务含义：
+ * 用户上电后能直接看到系统现在初始化到了哪一步，
+ * 比如在连 WiFi、初始化舵机还是配置 MQTT。
  */
 void showBootProgress(uint8_t progress, const char *statusText)
 {
@@ -395,17 +423,17 @@ void showBootProgress(uint8_t progress, const char *statusText)
 
     oledDisplay.setCursor(0, 16);
 
-    // 为防止越界，仅显示前 16 个字符
+    // 为避免一行太长显示不下，只保留前 16 个字符。
     char displayText[17];
     strncpy(displayText, statusText, 16);
     displayText[16] = '\0';
     oledDisplay.print("> ");
     oledDisplay.println(displayText);
 
-    // 进度条外框
+    // 绘制进度条外框。
     oledDisplay.drawRect(barX, barY, barWidth, barHeight, SH110X_WHITE);
 
-    // 进度条填充（留 2 像素边框）
+    // 按百分比填充进度条。
     uint8_t fillWidth = (uint8_t)((progress * (barWidth - 4)) / 100);
     if (fillWidth > 0)
     {
@@ -422,14 +450,13 @@ void showBootProgress(uint8_t progress, const char *statusText)
 /**
  * @brief 初始化 OLED 显示屏
  *
- * 说明：
- * 1. 以 400kHz 启动 I2C 总线（SDA/SCL 引脚由 oledInit.h 宏定义）。
- * 2. 初始化 SSD1306 控制器；失败则打印错误并进入死循环，防止后续状态不可见。
- * 3. 初始化成功后立即显示第一帧启动进度（0%），并启动动画计时。
+ * 业务含义：
+ * OLED 是整个系统的“本地可视化窗口”，
+ * 所以必须在启动早期就准备好，后续所有初始化状态都显示在这里。
  */
 void setupOLED()
 {
-    // 指定 I2C 引脚与总线速率（400kHz）
+    // 指定 I2C 引脚与总线速率（400kHz）。
     Wire.begin(SDA_PIN, SCL_PIN, 400000);
 
     // OLED 初始化失败时进入降级模式，避免系统因单个外设失败卡死。

@@ -85,11 +85,13 @@ void setCurrentWeight(int32_t weight);
  */
 void setCurrentWeights(int32_t weight1, int32_t weight2, int32_t weight3);
 
-/** * @brief 更新 ESP32-CAM 最新 AI 识别结果（供 AI 结果页显示）
+/**
+ * @brief 更新 ESP32-CAM 最新 AI 识别结果
  * @param detected  是否识别到目标
  * @param label     识别标签（字符串，最多 31 字符）
  * @param conf      置信度（0.0~1.0）
  * @param updateMs  本次识别时的 millis() 时间戳
+ * 业务含义：把摄像头最新识别结果同步到 OLED 的“识别结果页”。
  */
 void setAiResult(bool detected, const char *label, float conf, uint32_t updateMs);
 
@@ -124,9 +126,11 @@ void setInitModuleStatus(InitModuleId module, InitModuleStatus status, const cha
  */
 void setRuntimeHealth(bool wifiOk, bool wifiInitTimeout, bool hx711Ok, bool mqttOk);
 
-/** * @brief 显示开机进度条页面
+/**
+ * @brief 显示开机进度条页面
  * @param progress 进度百分比（0~100）
  * @param statusText 当前阶段文本
+ * 业务含义：让用户看到系统当前初始化到了哪一步。
  */
 void showBootProgress(uint8_t progress, const char *statusText);
 

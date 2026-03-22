@@ -1,27 +1,19 @@
 #ifndef _BUZZER_H_
 #define _BUZZER_H_
+
 #include <Arduino.h>
 
-#define BUZZER_PIN 15 // 有源蜂鸣器 GPIO
+// 本项目使用有源蜂鸣器，低电平响，高电平停。
+#define BUZZER_PIN 15
 
-/**
- * @brief 初始化蜂鸣器
- * 触发方式：低电平触发
- */
+// 初始化蜂鸣器到默认静音状态。
 void buzzerInit();
-/**
- * @brief 蜂鸣器发声
- * @param duration_ms 发声持续时间（毫秒）
- */
+
+// 蜂鸣器短响一段时间，适合提示音。
 void buzzerBeep(uint32_t duration_ms);
 
-/**
- * @brief 蜂鸣器持续打开
- */
+// 持续打开/关闭蜂鸣器，适合超重告警。
 void buzzerOn();
-/**
- * @brief 蜂鸣器持续关闭
- */
 void buzzerOff();
 
 #endif

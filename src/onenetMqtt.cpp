@@ -4,12 +4,15 @@
 
 namespace
 {
-    // MQTT 传输底层客户端（当前为明文 TCP）。
-    // 如需 TLS，可改为 WiFiClientSecure 并配置证书。
+    // ===== OneNET MQTT 模块内部状态 =====
+    // 这里封装的是“联网后把三路垃圾桶数据上传到云平台”的能力。
+
+    // MQTT 传输底层客户端。
+    // 当前使用普通 TCP，如果后续需要加密通信，可替换成 WiFiClientSecure。
     WiFiClient gWifiClient;
     PubSubClient gMqttClient(gWifiClient);
 
-    // 全局配置（由 oneNetMqttBegin 覆盖）
+    // 启动时写入的 OneNET 配置。
     OneNetMqttConfig gConfig = {
         "mqtts.heclouds.com",
         1883,
@@ -19,19 +22,20 @@ namespace
         1893456000,
         OneNetSignMethod::SHA256};
 
-    // 模块初始化状态
+    // 是否已经完成参数配置。
     bool gInited = false;
 
-    // 最近一次连接尝试时间（用于重连限流）
+    // 最近一次重连尝试时间，用来避免频繁重连。
     uint32_t gLastConnectAttemptMs = 0;
 
-    // OneNET 相关 Topic 缓存
+    // OneNET 物模型相关 Topic 缓存，避免每次上报都重新拼接字符串。
     String gPropertyPostTopic;
     String gPropertyPostReplyTopic;
     String gPropertySetTopic;
 
     /**
-     * @brief 生成 token 用资源串
+     * @brief 生成 OneNET token 所需的资源串
+     * 业务含义：标识“哪个产品下的哪台设备”。
      */
     String buildResource()
     {
@@ -39,9 +43,8 @@ namespace
     }
 
     /**
-     * @brief 生成消息 id
-     *
-     * 当前用 millis()，满足一般调试和轻量业务场景。
+     * @brief 生成消息 ID
+     * 业务含义：每次属性上报都带一个唯一编号，便于平台区分消息。
      */
     String buildMessageId()
     {
@@ -49,23 +52,14 @@ namespace
     }
 
     /**
-     * @brief MQTT 订阅回调
-     *
-     * 当前仅打印平台下发和应答消息，便于联调。
+     * @brief 平台下行消息回调
+     * 当前项目只保留接口，不主动处理平台下发控制命令。
      */
     void mqttCallback(char *topic, byte *payload, unsigned int length)
     {
-        String msg;
-        msg.reserve(length);
-        for (unsigned int i = 0; i < length; ++i)
-        {
-            msg += static_cast<char>(payload[i]);
-        }
-
-        // Serial.print("[OneNET] topic: ");
-        // Serial.println(topic);
-        // Serial.print("[OneNET] payload: ");
-        // Serial.println(msg);
+        (void)topic;
+        (void)payload;
+        (void)length;
     }
 
     /**
@@ -91,7 +85,7 @@ namespace
         }
         gLastConnectAttemptMs = nowMs;
 
-        // 每次重连都重新生成 token，降低 token 过期导致登录失败的风险
+        // 每次重连都重新生成 token，避免 token 过期后还拿旧值去登录。
         String token = generateOneNetToken(
             gConfig.base64Key,
             buildResource(),
@@ -116,7 +110,7 @@ namespace
 
         // Serial.println("[OneNET] MQTT connected");
 
-        // 订阅平台应答与属性下发主题
+        // 连接成功后订阅平台应答和属性下发主题。
         gMqttClient.subscribe(gPropertyPostReplyTopic.c_str(), 0);
         gMqttClient.subscribe(gPropertySetTopic.c_str(), 0);
     }
@@ -127,22 +121,22 @@ namespace
  * @param config OneNET 连接配置（host、port、productId、deviceName、base64Key、tokenExpireAt、signMethod）
  *
  * 说明：
- * 1. 保存配置并生成物模型标准 Topic 字符串缓存。
- * 2. 配置 MQTT 客户端的服务器地址、消息回调及发送缓冲区大小。
- * 3. 本函数只做配置，真实连接延后到 oneNetMqttLoop() 自动完成。
+ * 1. 保存云平台连接参数。
+ * 2. 生成后续属性上报要用到的 Topic。
+ * 3. 配置 MQTT 客户端，但不在这里阻塞等待联网成功。
  */
 void oneNetMqttBegin(const OneNetMqttConfig &config)
 {
     gConfig = config;
 
-    // OneNET 物模型标准 Topic
+    // OneNET 物模型标准 Topic。
     gPropertyPostTopic = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/post";
     gPropertyPostReplyTopic = gPropertyPostTopic + "/reply";
     gPropertySetTopic = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/set";
 
     gMqttClient.setServer(gConfig.host, gConfig.port);
     gMqttClient.setCallback(mqttCallback);
-    // 扩大发送缓冲区，9 个属性的 payload 约 380 字节，默认 256 不够
+    // 三个仓位一共要上报 9 个属性，默认缓冲区偏小，这里提前扩容。
     gMqttClient.setBufferSize(512);
 
     gInited = true;
@@ -152,9 +146,9 @@ void oneNetMqttBegin(const OneNetMqttConfig &config)
  * @brief 维护 MQTT 连接与消息收发（在 loop() 中持续调用）
  *
  * 说明：
- * 1. 模块未初始化时直接返回。
- * 2. 断开时调用 tryConnect() 尝试重连（内部有 3s 限流）。
- * 3. 已连接时调用 PubSubClient::loop() 处理保活和下行消息。
+ * 1. 未初始化时不做任何事。
+ * 2. 未连接时尝试重连。
+ * 3. 已连接时处理保活和平台消息。
  */
 void oneNetMqttLoop()
 {
@@ -169,7 +163,7 @@ void oneNetMqttLoop()
         return;
     }
 
-    // 已连接时持续处理保活和收发
+    // 已连接时持续处理保活和收发。
     gMqttClient.loop();
 }
 
@@ -190,9 +184,9 @@ bool oneNetMqttConnected()
  * @return true 发布成功；false MQTT 未连接或发布失败
  *
  * 说明：
- * 按 OneJSON 格式组装 9 个属性的 payload（约 380 字节），
- * 发布至物模型属性上报 Topic。float 使用 dtostrf 格式化，
- * 发送缓冲区已在 oneNetMqttBegin() 中扩大至 512 字节。
+ * 业务含义：
+ * 把三个仓位的重量、百分比、满载状态统一打包，
+ * 以上报到 OneNET 物模型，供云端页面或小程序查看。
  */
 bool oneNetMqttUploadProperties(
     const BoxBinData &phone,
@@ -206,14 +200,13 @@ bool oneNetMqttUploadProperties(
 
     String msgId = buildMessageId();
 
-    // float 格式化为字符串（dtostrf 是 AVR/ESP32 标准函数）
+    // 百分比是 float，需要先转成字符串再拼进 JSON。
     char phonePct[10], mousePct[10], batteryPct[10];
     dtostrf(phone.percent, 1, 2, phonePct);
     dtostrf(mouse.percent, 1, 2, mousePct);
     dtostrf(battery.percent, 1, 2, batteryPct);
 
-    // OneJSON 属性上报载荷，包含全部 9 个物模型属性
-    // payload 最大约 380 字节，缓冲区 512 足够
+    // OneJSON 属性上报载荷，包含三个仓位的全部属性。
     char payload[512];
     snprintf(payload, sizeof(payload),
              "{\"id\":\"%s\",\"version\":\"1.0\",\"params\":{"
@@ -233,14 +226,5 @@ bool oneNetMqttUploadProperties(
              battery.weight, batteryPct, battery.full ? "true" : "false");
 
     bool ok = gMqttClient.publish(gPropertyPostTopic.c_str(), payload, false);
-    // if (ok)
-    // {
-    //     Serial.print("[OneNET] property post: ");
-    //     Serial.println(payload);
-    // }
-    // else
-    // {
-    //     Serial.println("[OneNET] property post failed");
-    // }
     return ok;
 }

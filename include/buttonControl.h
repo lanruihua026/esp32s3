@@ -3,44 +3,25 @@
 
 #include <Arduino.h>
 
-// ===== 按键引脚定义 =====
-#define BTN1_PIN 9  // 按键1：IO9，当前用于OLED左翻页
-#define BTN2_PIN 10 // 按键2：IO10，当前用于OLED右翻页
+// 两个实体按键当前只用于切换 OLED 页面。
+#define BTN1_PIN 9
+#define BTN2_PIN 10
 
-// ===== 消抖参数 =====
-#define BTN_DEBOUNCE_MS 20  // 消抖时间（ms）：等待抖动稳定
-#define BTN_COOLDOWN_MS 300 // 冷却时间（ms）：有效触发后屏蔽松开时的弹起抖动
+// 按键采用“中断捕获 + 主循环消抖”的方案。
+#define BTN_DEBOUNCE_MS 20
+#define BTN_COOLDOWN_MS 300
 
-/**
- * @brief 按键回调函数类型
- *
- * 在按键稳定触发（下降沿）时被调用一次。
- */
+// 按键稳定触发后执行的业务回调。
 typedef void (*ButtonCallback)();
 
-/**
- * @brief 初始化两个按键 GPIO（上拉输入）
- */
+// 初始化按键引脚和中断。
 void setupButtons();
 
-/**
- * @brief 注册按键1按下时的回调函数
- * @param cb 回调函数指针
- */
+// 注册按键 1/2 的业务回调。
 void setButton1Callback(ButtonCallback cb);
-
-/**
- * @brief 注册按键2按下时的回调函数
- * @param cb 回调函数指针
- */
 void setButton2Callback(ButtonCallback cb);
 
-/**
- * @brief 按键轮询（应在 loop() 中持续调用）
- *
- * 中断负责瞬时捕获按键边沿并设置标志，
- * 本函数只做消抖确认与回调分发，全程非阻塞。
- */
+// 在 loop() 中持续调用，用于做消抖和回调分发。
 void pollButtons();
 
-#endif // _BUTTON_CONTROL_H_
+#endif
