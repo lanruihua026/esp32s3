@@ -12,6 +12,9 @@ static float zero_offset2 = 0.0f;
 
 static bool isScaleReady2 = false;
 
+static float s_probeRaw2  = 0.0f;
+static int   s_probeValid2 = 0;
+
 static int8_t scale_direction2 = 1;
 static bool direction_locked2 = false;
 
@@ -46,7 +49,8 @@ bool setupHX711_2()
         readRawData2();
     }
 
-    float probeRaw = readAverageRaw2(5);
+    float probeRaw = readAverageRaw2(5, &s_probeValid2);
+    s_probeRaw2 = probeRaw;
     if (probeRaw == 0.0f)
     {
         isScaleReady2 = false;
@@ -208,4 +212,10 @@ void setCalibrationFactor2(float factor)
     {
         calibration_factor2 = factor;
     }
+}
+
+void hx711GetProbeResult2(float *raw, int *validCount)
+{
+    if (raw)        *raw        = s_probeRaw2;
+    if (validCount) *validCount = s_probeValid2;
 }

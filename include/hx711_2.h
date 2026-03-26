@@ -34,4 +34,6 @@ void tareScale2();
  */
 void setCalibrationFactor2(float factor);
 
+void hx711GetProbeResult2(float *raw, int *validCount);
+
 #endif // HX711_2_H

@@ -15,6 +15,10 @@ static float zero_offset = 0.0f;
 // 初始化完成标志
 static bool isScaleReady = false;
 
+// probe 阶段诊断缓存（供外部读取，用于 OLED 调试显示）
+static float s_probeRaw = 0.0f;
+static int   s_probeValid = 0;
+
 // 部分接线或受力方向下，施加重量可能使原始值变小（负方向）。
 // scale_direction 用于统一把“加重”映射为正重量。
 static int8_t scale_direction = 1;
@@ -70,8 +74,9 @@ bool setupHX711()
         readRawData();
     }
 
-    // 通过一次均值采样判断传感器是否可用，避免后续流程误判为“初始化成功”。
-    float probeRaw = readAverageRaw(5);
+    // 通过一次均值采样判断传感器是否可用，避免后续流程误判为”初始化成功”。
+    float probeRaw = readAverageRaw(5, &s_probeValid);
+    s_probeRaw = probeRaw;
     if (probeRaw == 0.0f)
     {
         isScaleReady = false;
@@ -289,4 +294,10 @@ void setCalibrationFactor(float factor)
     {
         calibration_factor = factor;
     }
+}
+
+void hx711GetProbeResult(float *raw, int *validCount)
+{
+    if (raw)        *raw        = s_probeRaw;
+    if (validCount) *validCount = s_probeValid;
 }

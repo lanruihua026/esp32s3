@@ -3,41 +3,61 @@
 // 全局舵机对象：
 // 负责驱动垃圾桶分拣机构转到指定角度。
 Servo servo;
+Servo servo2;
+Servo servo3;
 
 void initServo()
 {
-    // 将舵机挂接到指定引脚，并先回到默认位置。
+    // 将三路舵机挂接到对应引脚，并先回到默认位置。
     servo.attach(SERVO_PIN);
+    servo2.attach(SERVO_PIN_2);
+    servo3.attach(SERVO_PIN_3);
     setServoAngle(0);
+    setServoAngle2(0);
+    setServoAngle3(0);
+}
+
+static int clampAngle(int angle)
+{
+    if (angle < 0) return 0;
+    if (angle > 180) return 180;
+    return angle;
 }
 
 void setServoAngle(int angle)
 {
-    // 对角度做边界保护，避免传入非法值导致舵机动作异常。
-    if (angle < 0)
-    {
-        angle = 0;
-    }
-    else if (angle > 180)
-    {
-        angle = 180;
-    }
+    servo.write(clampAngle(angle));
+}
 
-    servo.write(angle);
+void setServoAngle2(int angle)
+{
+    servo2.write(clampAngle(angle));
+}
+
+void setServoAngle3(int angle)
+{
+    servo3.write(clampAngle(angle));
 }
 
 void runServoSelfTest()
 {
-    // 开机自检动作：
-    // 让舵机从默认位置转到中间角度，再回到原位，
+    // 开机自检动作：三路舵机依次从 0° 转到 90° 再回到 0°，
     // 便于观察供电、驱动和机械结构是否正常。
     const int testAngle = 90;
     const uint16_t settleMs = 450;
 
     setServoAngle(0);
+    setServoAngle2(0);
+    setServoAngle3(0);
     delay(settleMs);
+
     setServoAngle(testAngle);
+    setServoAngle2(testAngle);
+    setServoAngle3(testAngle);
     delay(settleMs);
+
     setServoAngle(0);
+    setServoAngle2(0);
+    setServoAngle3(0);
     delay(settleMs);
 }
