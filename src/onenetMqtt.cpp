@@ -95,20 +95,18 @@ namespace
 
         if (token.isEmpty())
         {
-            // Serial.println("[OneNET] token generate failed");
+            Serial.println("[OneNET] TOKEN FAIL");
             return;
         }
 
-        // Serial.println("[OneNET] MQTT connecting...");
         bool ok = gMqttClient.connect(gConfig.deviceName, gConfig.productId, token.c_str());
         if (!ok)
         {
-            // Serial.print("[OneNET] MQTT connect failed, rc=");
-            // Serial.println(gMqttClient.state());
+            Serial.printf("[OneNET] MQTT FAIL rc=%d\n", gMqttClient.state());
             return;
         }
 
-        // Serial.println("[OneNET] MQTT connected");
+        Serial.println("[OneNET] MQTT OK");
 
         // 连接成功后订阅平台应答和属性下发主题。
         gMqttClient.subscribe(gPropertyPostReplyTopic.c_str(), 0);
@@ -226,5 +224,6 @@ bool oneNetMqttUploadProperties(
              battery.weight, batteryPct, battery.full ? "true" : "false");
 
     bool ok = gMqttClient.publish(gPropertyPostTopic.c_str(), payload, false);
+    Serial.println(ok ? "[OneNET] POST OK" : "[OneNET] POST FAIL");
     return ok;
 }

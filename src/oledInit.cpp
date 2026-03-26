@@ -462,7 +462,6 @@ void setupOLED()
     // OLED 初始化失败时进入降级模式，避免系统因单个外设失败卡死。
     if (!oledDisplay.begin(SCREEN_ADDRESS, true))
     {
-        Serial.println("SH1106 init failed");
         g_oledReady = false;
         return;
     }
