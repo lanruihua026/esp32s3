@@ -34,11 +34,5 @@ void tareScale();
  */
 void setCalibrationFactor(float factor);
 
-/**
- * @brief 读取 probe 阶段的原始值与有效采样数（用于 OLED 调试）
- * @param raw        输出：probe 均值（全部超时时为 0）
- * @param validCount 输出：5 次采样中成功读到数据的次数（0 = 全部超时）
- */
-void hx711GetProbeResult(float *raw, int *validCount);
 
 #endif // HX711_H

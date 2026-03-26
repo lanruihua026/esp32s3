@@ -1,3 +1,17 @@
+/**
+ * @file main.cpp
+ * @brief 智能垃圾分类箱主程序
+ *
+ * 系统功能概述：
+ * 1. ESP32-CAM 通过串口将 AI 识别结果（垃圾类别+置信度）发送给本机。
+ * 2. 本机根据识别类别驱动舵机将垃圾导入对应仓位。
+ * 3. 三路 HX711 压力传感器分别监测三个仓位的重量，满载时触发声光告警。
+ * 4. 重量数据通过 OneNET MQTT 定期上报至云平台，供远程监控使用。
+ * 5. OLED 屏幕实时显示系统状态、识别结果和仓位重量，支持按键翻页。
+ *
+ * 初始化顺序：指示器 → 摄像头串口 → OLED → HX711 → WiFi → 舵机 → 按键 → MQTT
+ */
+
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 #include <cstdlib>
@@ -17,30 +31,31 @@ namespace
 {
     // ===== 硬件资源定义 =====
     // 这里集中放引脚、时间参数、业务阈值，便于后续调试和统一修改。
-    constexpr uint8_t WARNING_LIGHT_PIN = 6;
-    constexpr uint8_t RGB_LED_PIN = 38;
-    constexpr uint8_t RGB_LED_COUNT = 1;
+    constexpr uint8_t WARNING_LIGHT_PIN = 6; // 满载告警灯 GPIO 引脚
+    constexpr uint8_t RGB_LED_PIN = 38;      // 板载 WS2812 RGB LED 数据引脚
+    constexpr uint8_t RGB_LED_COUNT = 1;     // 板载 RGB LED 数量（仅 1 颗）
 
-    constexpr uint8_t CAM_UART_RX_PIN = 18;
-    constexpr uint8_t CAM_UART_TX_PIN = 17;
-    constexpr uint32_t CAM_UART_BAUD = 115200;
+    constexpr uint8_t CAM_UART_RX_PIN = 18;    // 接收 ESP32-CAM 数据的串口 RX 引脚
+    constexpr uint8_t CAM_UART_TX_PIN = 17;    // 发送给 ESP32-CAM 的串口 TX 引脚（保留，当前未使用）
+    constexpr uint32_t CAM_UART_BAUD = 115200; // 与 ESP32-CAM 通信的波特率
 
-    constexpr int32_t FULL_WEIGHT_G = 1000;
-    constexpr int32_t WARNING_RELEASE_HYSTERESIS_G = 100;
-    constexpr uint32_t WEIGHT_SAMPLE_INTERVAL_MS = 500;
-    constexpr uint32_t PROPERTY_REPORT_INTERVAL_MS = 10000;
-    constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;
-    constexpr uint32_t WIFI_BOOT_WAIT_MS = 10000;
+    constexpr int32_t FULL_WEIGHT_G = 1000;                 // 仓位满载阈值（克），超过此值触发告警
+    constexpr int32_t WARNING_RELEASE_HYSTERESIS_G = 100;   // 告警解除回差（克），低于 FULL-100g 才解除，防止抖动反复触发
+    constexpr uint32_t WEIGHT_SAMPLE_INTERVAL_MS = 500;     // 重量采样周期（毫秒）
+    constexpr uint32_t PROPERTY_REPORT_INTERVAL_MS = 10000; // OneNET 属性上报周期（毫秒）
+    constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;      // WiFi 断线后重连尝试间隔（毫秒）
+    constexpr uint32_t WIFI_BOOT_WAIT_MS = 10000;           // 启动阶段等待 WiFi 连接的最长时间（毫秒）
 
-    // Recalibrated with a 216 g reference weight:
-    // B1: 229 g -> 216 g (fine tune), B2: 480 g -> 216 g, B3: 483 g -> 216 g.
-    constexpr float HX711_CAL_FACTOR_1 = 452.3f;
-    constexpr float HX711_CAL_FACTOR_2 = 419.8f;
-    constexpr float HX711_CAL_FACTOR_3 = 455.5f;
+    // HX711 校准系数（raw ADC 差值 / 克），使用 216g 砝码标定。
+    // 修改方法：new_factor = old_factor × (当前显示值 / 实际重量)
+    constexpr float HX711_CAL_FACTOR_1 = 452.3f; // 1 号仓（GPIO1/2）
+    constexpr float HX711_CAL_FACTOR_2 = 419.8f; // 2 号仓（GPIO11/12）
+    constexpr float HX711_CAL_FACTOR_3 = 455.5f; // 3 号仓（GPIO13/14）
 
-    constexpr const char *ONENET_PRODUCT_ID = "f45hkc7xC7";
-    constexpr const char *ONENET_DEVICE_NAME = "Box1";
-    constexpr const char *ONENET_BASE64_KEY = "T0R5ejYyM1JrT2VuczBkZllINmZuazRicEMxc29xcnk=";
+    // ===== OneNET 云平台配置 =====
+    constexpr const char *ONENET_PRODUCT_ID = "f45hkc7xC7";                                   // 产品 ID
+    constexpr const char *ONENET_DEVICE_NAME = "Box1";                                        // 设备名称
+    constexpr const char *ONENET_BASE64_KEY = "T0R5ejYyM1JrT2VuczBkZllINmZuazRicEMxc29xcnk="; // Base64 编码的设备密钥
 
     // 板载 RGB 仅用于上电后快速关闭，避免默认乱闪。
     Adafruit_NeoPixel boardRgb(RGB_LED_COUNT, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -72,14 +87,17 @@ namespace
     uint32_t g_lastWiFiRetryMs = 0;
 
     // 启动阶段和运行阶段的状态缓存。
-    bool g_hx711_1InitOk = false;
-    bool g_hx711_2InitOk = false;
-    bool g_hx711_3InitOk = false;
-    bool g_wifiInitTimeout = false;
-    bool g_warningActive = false;
+    bool g_hx711_1InitOk = false;   // 1 号仓 HX711 是否初始化成功，业务含义是称重模块的 1 号通道是否正常。
+    bool g_hx711_2InitOk = false;   // 2 号仓 HX711 是否初始化成功，业务含义是称重模块的 2 号通道是否正常。
+    bool g_hx711_3InitOk = false;   // 3 号仓 HX711 是否初始化成功，业务含义是称重模块的 3 号通道是否正常。
+    bool g_wifiInitTimeout = false; // 启动阶段 WiFi 是否连接超时，业务含义是系统是否处于“联网异常”状态，影响 OLED 显示和告警逻辑。
+    bool g_warningActive = false;   // 告警状态，true 表示当前处于满载告警中，false 表示未告警或已解除告警。
 
-    // 将重量转换为百分比，范围限制在 0~100%，
-    // 用于云平台物模型上报。
+    /**
+     * @brief 将重量限制在 0~100% 的范围内
+     * @param weight 重量（克）
+     * @return 百分比
+     */
     float clampPercent(int32_t weight)
     {
         float percent = (weight * 100.0f) / static_cast<float>(FULL_WEIGHT_G);
@@ -94,27 +112,35 @@ namespace
         return percent;
     }
 
+    /**
+     * @brief 判断三路 HX711 是否全部初始化成功
+     * @return true 三路均可用；false 至少一路失败
+     * 业务含义：只有全部可用时，才认为称重模块整体正常，OLED 状态页才显示OK
+     */
     bool allHx711Ready()
     {
-        return g_hx711_1InitOk && g_hx711_2InitOk && g_hx711_3InitOk;
+        return g_hx711_1InitOk && g_hx711_2InitOk && g_hx711_3InitOk; // 只有三路都正常，才认为称重模块整体正常
     }
 
-    // 将当前运行状态同步给 OLED 状态页。
-    // WiFi 一旦后续恢复成功，会自动清除“启动超时”标记。
+    /**
+     * @brief 同步运行时系统状态
+     */
     void syncRuntimeHealth()
     {
-        const bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+        const bool wifiConnected = (WiFi.status() == WL_CONNECTED); // 当前WiFi连接状态，用于检测联网是否异常
         if (wifiConnected)
         {
-            g_wifiInitTimeout = false;
+            g_wifiInitTimeout = false; // 只要当前 WiFi 连接正常，就认为没有联网异常，即使启动阶段曾经超时过也没关系了，OLED 显示和告警逻辑都以当前连接状态为准。
         }
 
         setRuntimeHealth(wifiConnected, g_wifiInitTimeout, allHx711Ready(), oneNetMqttConnected());
     }
 
+    /**
+     * @brief 上电初始化时默认关闭蜂鸣器，警示灯，板载RGB
+     */
     void initBoardIndicators()
     {
-        // 先关掉上电后可能乱亮的灯和蜂鸣器，避免误判为故障。
         boardRgb.begin();
         boardRgb.setPixelColor(0, 0);
         boardRgb.show();
@@ -126,15 +152,19 @@ namespace
         buzzerOff();
     }
 
+    /**
+     * @brief 初始化摄像头串口，用于接收esp32cam回传的识别结果
+     */
     void initCameraUart()
     {
-        // 初始化与 ESP32-CAM 相连的串口，用来接收识别结果。
         CameraUart.begin(CAM_UART_BAUD, SERIAL_8N1, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
     }
 
+    /**
+     * @brief 初始化 OLED 显示屏
+     */
     void initOled()
     {
-        // OLED 放在前面初始化，后续模块启动进度都显示在这里。
         resetInitModuleStatus();
         setInitModuleStatus(INIT_MODULE_OLED, INIT_RUNNING, "Init");
         setupOLED();
@@ -142,55 +172,36 @@ namespace
         setFullWeight(FULL_WEIGHT_G);
     }
 
+    /**
+     * @brief 初始化 HX711 重量传感器模块
+     */
     void initHx711Modules()
     {
         // 依次初始化三路重量传感器，并写入各自校准系数。
         // 三路全部可用才认为称重模块整体正常。
         setInitModuleStatus(INIT_MODULE_HX711, INIT_RUNNING, "Probe");
 
-        char dbgBuf[32];
-        float probeRaw;
-        int probeValid;
-
-        // --- HX711_1 ---
-        showBootProgress(20, "HX711_1 probing...");
+        showBootProgress(20, "HX711_1");
         g_hx711_1InitOk = setupHX711();
-        hx711GetProbeResult(&probeRaw, &probeValid);
-        snprintf(dbgBuf, sizeof(dbgBuf), "HX711_1:%s v=%d/5 r=%.0f",
-                 g_hx711_1InitOk ? "OK" : "FAIL", probeValid, probeRaw);
-        showBootProgress(24, dbgBuf);
-        Serial.println(dbgBuf);
-        delay(2000);
-
+        showBootProgress(28, "HX711_1 Cal");
         setCalibrationFactor(HX711_CAL_FACTOR_1);
 
-        // --- HX711_2 ---
-        showBootProgress(30, "HX711_2 probing...");
+        showBootProgress(32, "HX711_2");
         g_hx711_2InitOk = setupHX711_2();
-        hx711GetProbeResult2(&probeRaw, &probeValid);
-        snprintf(dbgBuf, sizeof(dbgBuf), "HX711_2:%s v=%d/5 r=%.0f",
-                 g_hx711_2InitOk ? "OK" : "FAIL", probeValid, probeRaw);
-        showBootProgress(34, dbgBuf);
-        Serial.println(dbgBuf);
-        delay(2000);
-
+        showBootProgress(36, "HX711_2 Cal");
         setCalibrationFactor2(HX711_CAL_FACTOR_2);
 
-        // --- HX711_3 ---
-        showBootProgress(38, "HX711_3 probing...");
+        showBootProgress(38, "HX711_3");
         g_hx711_3InitOk = setupHX711_3();
-        hx711GetProbeResult3(&probeRaw, &probeValid);
-        snprintf(dbgBuf, sizeof(dbgBuf), "HX711_3:%s v=%d/5 r=%.0f",
-                 g_hx711_3InitOk ? "OK" : "FAIL", probeValid, probeRaw);
-        showBootProgress(42, dbgBuf);
-        Serial.println(dbgBuf);
-        delay(2000);
-
+        showBootProgress(40, "HX711_3 Cal");
         setCalibrationFactor3(HX711_CAL_FACTOR_3);
 
         setInitModuleStatus(INIT_MODULE_HX711, allHx711Ready() ? INIT_OK : INIT_ERROR, allHx711Ready() ? "Ready" : "Check");
     }
 
+    /**
+     * @brief 初始化 WiFi 模块，并在启动阶段等待连接（有超时机制）
+     */
     void initWiFiWithTimeout()
     {
         // WiFi 允许在启动阶段等待一段时间，
@@ -204,6 +215,7 @@ namespace
         {
             delay(200);
             const uint32_t elapsed = millis() - startMs;
+            // 将已等待时间线性映射到进度条 45%~65% 区间，让用户看到联网进度
             const uint8_t progress = 45 + static_cast<uint8_t>((elapsed * 20UL) / WIFI_BOOT_WAIT_MS);
             showBootProgress(progress, "WiFi");
         }
@@ -221,7 +233,9 @@ namespace
             showBootProgress(65, "WiFi Timeout");
         }
     }
-
+    /**
+     * @brief 初始化舵机模块，并执行自检
+     */
     void initServoModule()
     {
         // 舵机属于执行器，放在网络之后初始化，
@@ -233,6 +247,9 @@ namespace
         setInitModuleStatus(INIT_MODULE_SERVO, INIT_OK, "Ready");
     }
 
+    /**
+     * @brief 初始化按键模块
+     */
     void initButtons()
     {
         // 按键只负责切换 OLED 页面，不参与核心控制逻辑。
@@ -240,12 +257,15 @@ namespace
         showBootProgress(84, "Buttons");
         setupButtons();
         setButton1Callback([]()
-                           { prevOledPage(); });
+                           { prevOledPage(); }); // 按键 1：向左翻页（2→1→0→2）
         setButton2Callback([]()
-                           { toggleOledPage(); });
+                           { toggleOledPage(); }); // 按键 2：向右翻页（0→1→2→0）
         setInitModuleStatus(INIT_MODULE_BUTTON, INIT_OK, "Ready");
     }
 
+    /**
+     * @brief 初始化 MQTT 模块
+     */
     void initMqtt()
     {
         // MQTT 这里只做参数配置，真正连接在 loop() 中由 oneNetMqttLoop() 维护。
@@ -253,18 +273,21 @@ namespace
         showBootProgress(92, "OneNET");
 
         const OneNetMqttConfig cfg = {
-            "mqtts.heclouds.com",
-            1883,
-            ONENET_PRODUCT_ID,
-            ONENET_DEVICE_NAME,
-            ONENET_BASE64_KEY,
-            1893456000,
-            OneNetSignMethod::SHA256};
+            "mqtts.heclouds.com",      // OneNET MQTT 服务器地址
+            1883,                      // MQTT 端口（非 TLS）
+            ONENET_PRODUCT_ID,         // 产品 ID
+            ONENET_DEVICE_NAME,        // 设备名称
+            ONENET_BASE64_KEY,         // Base64 编码的设备鉴权密钥
+            1893456000,                // Token 过期时间戳（Unix 时间，需定期更新）
+            OneNetSignMethod::SHA256}; // 签名算法：HMAC-SHA256
 
         oneNetMqttBegin(cfg);
         setInitModuleStatus(INIT_MODULE_MQTT, INIT_OK, "Ready");
     }
 
+    /**
+     * @brief 初始化定时器
+     */
     void initTimers()
     {
         // 所有周期任务都从系统启动完成时开始计时。
@@ -274,17 +297,23 @@ namespace
         g_lastWiFiRetryMs = now;
     }
 
+    /**
+     * @brief 更新模型识别结果，并同步更新 OLED 显示内容和 OneNET 上报缓存
+     * @param detected 是否识别到目标
+     * @param label 识别到的目标类别标签
+     * @param conf 识别置信度（0~1）
+     */
     void setAiState(bool detected, const char *label, float conf)
     {
-        // 统一更新 AI 识别缓存，避免串口解析逻辑和显示逻辑分散。
-        g_lastAiDetected = detected;
-        g_lastAiConf = conf;
-        g_lastAiUpdateMs = millis();
+        // 统一更新模型识别缓存，避免串口解析逻辑和显示逻辑分散。
+        g_lastAiDetected = detected; // 是否识别到目标
+        g_lastAiConf = conf;         // 识别置信度
+        g_lastAiUpdateMs = millis(); // 识别结果更新时间戳，多少毫秒前被更新，用于 OLED 显示“刚识别”状态
 
-        strncpy(g_lastAiLabel, label, sizeof(g_lastAiLabel) - 1);
+        strncpy(g_lastAiLabel, label, sizeof(g_lastAiLabel) - 1); // 复制识别标签
         g_lastAiLabel[sizeof(g_lastAiLabel) - 1] = '\0';
 
-        setAiResult(detected, g_lastAiLabel, g_lastAiConf, g_lastAiUpdateMs);
+        setAiResult(detected, g_lastAiLabel, g_lastAiConf, g_lastAiUpdateMs); // 同步更新 OLED 显示内容和 OneNET 上报缓存
     }
 
     void parseCameraLine(const char *line)
@@ -300,35 +329,38 @@ namespace
 
         if (strncmp(line, "DET,", 4) == 0)
         {
-            const char *p1 = strchr(line, ',');
-            const char *p2 = p1 ? strchr(p1 + 1, ',') : nullptr;
+            const char *p1 = strchr(line, ',');                  // 指向第一个逗号（标签起始前）
+            const char *p2 = p1 ? strchr(p1 + 1, ',') : nullptr; // 指向第二个逗号（置信度起始前）
             if (!p1 || !p2)
             {
-                return;
+                return; // 报文格式不合法，丢弃
             }
 
             char label[sizeof(g_lastAiLabel)] = {0};
-            size_t labelLen = static_cast<size_t>(p2 - (p1 + 1));
+            size_t labelLen = static_cast<size_t>(p2 - (p1 + 1)); // 计算标签字符串长度
             if (labelLen >= sizeof(label))
             {
-                labelLen = sizeof(label) - 1;
+                labelLen = sizeof(label) - 1; // 防止标签过长溢出缓冲区
             }
-            memcpy(label, p1 + 1, labelLen);
+            memcpy(label, p1 + 1, labelLen); // 从 p1+1 处拷贝 labelLen 个字节作为标签
 
-            setAiState(true, label, static_cast<float>(atof(p2 + 1)));
+            float conf = static_cast<float>(atof(p2 + 1));
+            setAiState(true, label, conf);
+            Serial.printf("[CAM] DET label=%s conf=%.1f%%\n", label, conf * 100.0f);
             return;
         }
 
         if (strcmp(line, "NONE") == 0)
         {
             setAiState(false, "none", 0.0f);
+            Serial.println("[CAM] NONE");
             return;
         }
 
         if (strncmp(line, "ERR,", 4) == 0)
         {
             setAiState(false, "ERR", 0.0f);
-            Serial.printf("[CAM] %s\n", line);
+            Serial.printf("[CAM] ERR %s\n", line + 4);
         }
     }
 
@@ -358,61 +390,66 @@ namespace
             }
             else
             {
+                // 行缓冲区溢出（报文异常过长），丢弃当前行，从头重新接收
                 g_camLinePos = 0;
             }
         }
     }
 
-    int servoAngleForLabel(const char *label)
-    {
-        // 将识别类别映射到舵机角度，本质上就是“不同垃圾 -> 不同仓位”。
-        if (strcmp(label, "MobilePhone") == 0)
-        {
-            return 0;
-        }
-        if (strcmp(label, "Charger") == 0)
-        {
-            return 45;
-        }
-        if (strcmp(label, "Battery") == 0)
-        {
-            return 90;
-        }
-        if (strcmp(label, "Earphone") == 0)
-        {
-            return 180;
-        }
-        return 0;
-    }
-
     void updateServoByAiResult()
     {
-        // 识别到目标时按类别转到对应仓位；
-        // 没识别到时让舵机回到默认位置。
-        setServoAngle(g_lastAiDetected ? servoAngleForLabel(g_lastAiLabel) : 0);
+        // 三路舵机各负责一个仓位，识别到对应类别时转 180°，其余归 0°。
+        // 仓位分配：
+        //   MobilePhone（手机）      → servo1 (GPIO7)  手机仓
+        //   Battery（电池）          → servo2 (GPIO8)  电池仓
+        //   Charger/Earphone/其他    → servo3 (GPIO16) 数码配件仓
+        if (!g_lastAiDetected)
+        {
+            // 未检测到目标，全部归位
+            setServoAngle(0);
+            setServoAngle2(0);
+            setServoAngle3(0);
+            return;
+        }
+
+        const bool isMobile  = (strcmp(g_lastAiLabel, "MobilePhone") == 0);
+        const bool isBattery = (strcmp(g_lastAiLabel, "Battery") == 0);
+
+        setServoAngle (isMobile                    ? 180 : 0); // 手机仓
+        setServoAngle2(isBattery                   ? 180 : 0); // 电池仓
+        setServoAngle3((!isMobile && !isBattery)   ? 180 : 0); // 数码配件仓
     }
 
     void updateWeightsAndAlarm()
     {
         // 周期读取三路称重值，并同步到 OLED。
-        // 目前告警只针对 1 号仓位：超阈值亮灯并鸣叫，低于回差后解除。
+        // 三仓任一超过满载阈值即触发声光告警，全部低于回差后解除。
         g_currentWeight1 = static_cast<int32_t>(getWeight());
         g_currentWeight2 = static_cast<int32_t>(getWeight2());
         g_currentWeight3 = static_cast<int32_t>(getWeight3());
 
         setCurrentWeights(g_currentWeight1, g_currentWeight2, g_currentWeight3);
 
-        if (!g_warningActive && g_currentWeight1 >= FULL_WEIGHT_G)
+        // 满载告警：任一仓位超过阈值即触发，全部低于（阈值 - 回差）才解除。
+        // 回差设计避免重量在阈值附近抖动导致告警反复开关。
+        const bool anyFull = (g_currentWeight1 >= FULL_WEIGHT_G)
+                          || (g_currentWeight2 >= FULL_WEIGHT_G)
+                          || (g_currentWeight3 >= FULL_WEIGHT_G);
+        const bool allBelow = (g_currentWeight1 < (FULL_WEIGHT_G - WARNING_RELEASE_HYSTERESIS_G))
+                           && (g_currentWeight2 < (FULL_WEIGHT_G - WARNING_RELEASE_HYSTERESIS_G))
+                           && (g_currentWeight3 < (FULL_WEIGHT_G - WARNING_RELEASE_HYSTERESIS_G));
+
+        if (!g_warningActive && anyFull)
         {
             g_warningActive = true;
-            digitalWrite(WARNING_LIGHT_PIN, HIGH);
-            buzzerOn();
+            digitalWrite(WARNING_LIGHT_PIN, HIGH); // 点亮告警灯
+            buzzerOn();                            // 开启蜂鸣器
         }
-        else if (g_warningActive && g_currentWeight1 < (FULL_WEIGHT_G - WARNING_RELEASE_HYSTERESIS_G))
+        else if (g_warningActive && allBelow)
         {
             g_warningActive = false;
-            digitalWrite(WARNING_LIGHT_PIN, LOW);
-            buzzerOff();
+            digitalWrite(WARNING_LIGHT_PIN, LOW); // 关闭告警灯
+            buzzerOff();                          // 关闭蜂鸣器
         }
     }
 
@@ -425,6 +462,7 @@ namespace
         }
 
         g_lastWiFiRetryMs = now;
+        // 第一个 false：不关闭底层 WiFi 驱动；第二个 false：不清除已保存的 SSID/密码
         WiFi.disconnect(false, false);
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     }
@@ -440,6 +478,7 @@ namespace
 
         g_lastReportMs = now;
 
+        // 构造三个仓位的上报数据包：{当前重量(g), 占满百分比(0~100%), 是否满载}
         const BoxBinData bin1 = {g_currentWeight1, clampPercent(g_currentWeight1), g_currentWeight1 >= FULL_WEIGHT_G};
         const BoxBinData bin2 = {g_currentWeight2, clampPercent(g_currentWeight2), g_currentWeight2 >= FULL_WEIGHT_G};
         const BoxBinData bin3 = {g_currentWeight3, clampPercent(g_currentWeight3), g_currentWeight3 >= FULL_WEIGHT_G};
@@ -468,12 +507,11 @@ void setup()
 
     initTimers();
     syncRuntimeHealth();
-    Serial.println("System ready");
 }
 
 void loop()
 {
-    const uint32_t now = millis();
+    const uint32_t now = millis(); // 本次 loop 的时间戳，统一传给需要计时的函数，避免多次调用 millis() 产生不一致
 
     // 主循环按“先采集输入，再更新执行器，最后处理周期任务”组织。
     pollCameraUart();

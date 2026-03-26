@@ -15,9 +15,6 @@ static float zero_offset = 0.0f;
 // 初始化完成标志
 static bool isScaleReady = false;
 
-// probe 阶段诊断缓存（供外部读取，用于 OLED 调试显示）
-static float s_probeRaw = 0.0f;
-static int   s_probeValid = 0;
 
 // 部分接线或受力方向下，施加重量可能使原始值变小（负方向）。
 // scale_direction 用于统一把“加重”映射为正重量。
@@ -62,7 +59,6 @@ static bool waitDataReady(uint32_t timeout_us)
  */
 bool setupHX711()
 {
-    // Serial.println("Initializing HX711...");
     pinMode(HX711_DT, INPUT);
     pinMode(HX711_SCK, OUTPUT);
     digitalWrite(HX711_SCK, LOW);
@@ -75,18 +71,15 @@ bool setupHX711()
     }
 
     // 通过一次均值采样判断传感器是否可用，避免后续流程误判为”初始化成功”。
-    float probeRaw = readAverageRaw(5, &s_probeValid);
-    s_probeRaw = probeRaw;
+    float probeRaw = readAverageRaw(5);
     if (probeRaw == 0.0f)
     {
         isScaleReady = false;
-        Serial.println("HX711: init failed (probe timeout)");
         return false;
     }
 
     isScaleReady = true;
     tareScale();
-    // Serial.println("HX711 initialized. Place known weight for calibration.");
     return true;
 }
 
@@ -99,7 +92,6 @@ static int32_t readRawData()
     // 最长等待 100ms，避免阻塞过久
     if (!waitDataReady(100000))
     {
-        Serial.println("HX711: Data not ready!");
         return 0;
     }
 
@@ -202,8 +194,6 @@ float getWeight()
     {
         scale_direction = (netValue >= 0.0f) ? 1 : -1;
         direction_locked = true;
-        Serial.print("HX711 direction locked: ");
-        Serial.println(scale_direction);
     }
 
     float weight = (netValue * scale_direction) / calibration_factor;
@@ -236,13 +226,8 @@ void calibrateScale(float knownWeight)
 {
     if (!isScaleReady)
     {
-        Serial.println("Scale not ready!");
         return;
     }
-
-    Serial.print("Calibrating with known weight: ");
-    Serial.print(knownWeight);
-    Serial.println("g");
 
     const int samples = 10;
     float currentValue = readAverageRaw(samples);
@@ -253,9 +238,6 @@ void calibrateScale(float knownWeight)
     {
         calibration_factor = netValue / knownWeight;
     }
-
-    Serial.print("New calibration factor: ");
-    Serial.println(calibration_factor);
 }
 /**
  * @brief HX711去皮函数，用于将当前传感器读数设为零点
@@ -271,7 +253,6 @@ void tareScale()
         return;
     }
 
-    // Serial.println("Taring scale...");
 
     // 读取当前空载平均值作为零点偏移
     const int samples = 15;
@@ -279,9 +260,6 @@ void tareScale()
 
     // 重新去皮后允许再次识别方向
     direction_locked = false;
-
-    // Serial.print("Zero offset: ");
-    // Serial.println(zero_offset);
 }
 /**
  * @brief 设置校准因子
@@ -294,10 +272,4 @@ void setCalibrationFactor(float factor)
     {
         calibration_factor = factor;
     }
-}
-
-void hx711GetProbeResult(float *raw, int *validCount)
-{
-    if (raw)        *raw        = s_probeRaw;
-    if (validCount) *validCount = s_probeValid;
 }

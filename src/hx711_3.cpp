@@ -7,23 +7,38 @@
 #define HX711_SCK3 14
 
 // ===== 称重参数 =====
+// calibration_factor3：每 1 克对应的原始 ADC 差值（raw / g），通过 calibrateScale3() 校准后更新
 static float calibration_factor3 = 1000.0f;
+// zero_offset3：去皮后的零点偏移（原始 ADC），由 tareScale3() 采样设置
 static float zero_offset3 = 0.0f;
 
+// 初始化完成标志，false 时 getWeight3() 直接返回 0
 static bool isScaleReady3 = false;
 
-static float s_probeRaw3  = 0.0f;
-static int   s_probeValid3 = 0;
 
+// 部分接线或受力方向下，施加重量可能使原始值变小（负方向）。
+// scale_direction3 用于统一把"加重"映射为正重量：+1 表示正向，-1 表示反向。
 static int8_t scale_direction3 = 1;
+// 一旦检测到足够明显的受力变化，就锁定方向，避免来回抖动
 static bool direction_locked3 = false;
 
+// 小重量死区：将非常小的噪声视为 0g，提升静止显示稳定性
 static const float ZERO_DEADBAND_G3 = 2.0f;
+// 方向锁定阈值：净原始值绝对值超过该值时才判断并锁定受力方向
 static const float DIRECTION_LOCK_RAW_THRESHOLD3 = 30000.0f;
 
+// 前向声明，仅在本文件内部使用
 static int32_t readRawData3();
 static float readAverageRaw3(int samples, int *outValidCount = nullptr);
 
+/**
+ * @brief 等待第三个 HX711 数据就绪（DT 由高变低）
+ * @param timeout_us 超时时间（微秒）
+ * @return true 数据就绪；false 超时
+ *
+ * HX711 转换完成后会将 DT 拉低通知 MCU，此函数轮询该信号。
+ * 期间调用 yield() 喂看门狗，防止长时间忙等触发 TWDT 重启。
+ */
 static bool waitDataReady3(uint32_t timeout_us)
 {
     uint32_t start = micros();
@@ -33,28 +48,39 @@ static bool waitDataReady3(uint32_t timeout_us)
         {
             return false;
         }
-        yield();
+        yield(); // 喂看门狗，防止长时间忙等触发 TWDT 重启
     }
     return true;
 }
 
+/**
+ * @brief 初始化第三个 HX711 模块
+ * 说明：
+ * 1. 设置引脚模式，确保 SCK 初始为 LOW。
+ * 2. 上电后等待 1.2 秒预热，降低初始漂移影响。
+ * 3. 丢弃前 8 帧数据，进一步稳定读数。
+ * 4. 通过 5 帧均值探测传感器是否正常响应（probeRaw == 0 视为超时失败）。
+ * 5. 调用 tareScale3() 进行去皮，准备好称重使用。
+ * @return true 初始化成功；false 探测超时，传感器未就绪
+ */
 bool setupHX711_3()
 {
     pinMode(HX711_DT3, INPUT);
     pinMode(HX711_SCK3, OUTPUT);
     digitalWrite(HX711_SCK3, LOW);
+    // 上电后给传感器一点预热时间，降低初始漂移影响
     delay(1200);
+    // 丢弃若干帧启动阶段的不稳定数据
     for (int i = 0; i < 8; ++i)
     {
         readRawData3();
     }
 
-    float probeRaw = readAverageRaw3(5, &s_probeValid3);
-    s_probeRaw3 = probeRaw;
+    // 通过一次均值采样判断传感器是否可用
+    float probeRaw = readAverageRaw3(5);
     if (probeRaw == 0.0f)
     {
         isScaleReady3 = false;
-        Serial.println("HX711_3: init failed (probe timeout)");
         return false;
     }
 
@@ -63,16 +89,26 @@ bool setupHX711_3()
     return true;
 }
 
+/**
+ * @brief 读取第三个 HX711 一帧 24 位原始值（增益 128，通道 A）
+ * @return 带符号原始值（int32），等待超时时返回 0
+ *
+ * 时序说明：
+ * - 循环产生 24 个 SCK 脉冲，每个脉冲上升沿读取 DT 上的一位数据，高位先出。
+ * - 第 25 个额外脉冲用于向 HX711 写入下一次转换的增益/通道配置（此处保持 A 通道 128 增益）。
+ * - 24 位数据以补码形式输出，最高位为符号位，需做符号扩展为 int32。
+ */
 static int32_t readRawData3()
 {
+    // 最长等待 100ms，避免阻塞过久
     if (!waitDataReady3(100000))
     {
-        Serial.println("HX711_3: Data not ready!");
         return 0;
     }
 
     uint32_t data = 0;
 
+    // HX711 24 位数据，高位先出（MSB first）
     for (int i = 23; i >= 0; i--)
     {
         digitalWrite(HX711_SCK3, HIGH);
@@ -93,6 +129,7 @@ static int32_t readRawData3()
     digitalWrite(HX711_SCK3, LOW);
     delayMicroseconds(1);
 
+    // 将 24 位补码扩展为 32 位有符号整数
     if (data & 0x800000)
     {
         data |= 0xFF000000;
@@ -101,6 +138,15 @@ static int32_t readRawData3()
     return (int32_t)data;
 }
 
+/**
+ * @brief 对第三个 HX711 多次采样求均值，自动剔除超时失败的帧
+ * @param samples      采样次数（<=0 时直接返回 0）
+ * @param outValidCount 输出参数：有效帧数量（可为 nullptr）
+ * @return 有效样本的平均原始 ADC 值；全部失败时返回 0
+ *
+ * readRawData3() 超时返回 0，此处将其视为无效帧跳过，
+ * 避免超时零值拉偏均值。
+ */
 static float readAverageRaw3(int samples, int *outValidCount)
 {
     if (samples <= 0)
@@ -109,13 +155,13 @@ static float readAverageRaw3(int samples, int *outValidCount)
         return 0.0f;
     }
 
-    int64_t sum = 0;
-    int validCount = 0;
+    int64_t sum = 0;       // 使用 int64 防止多帧累加溢出
+    int validCount = 0;    // 有效（非超时）帧计数
 
     for (int i = 0; i < samples; i++)
     {
         int32_t raw = readRawData3();
-        if (raw != 0)
+        if (raw != 0)  // 0 视为超时失败帧，跳过
         {
             sum += raw;
             validCount++;
@@ -132,6 +178,16 @@ static float readAverageRaw3(int samples, int *outValidCount)
     return (float)sum / validCount;
 }
 
+/**
+ * @brief 读取第三个 HX711 当前重量（单位：克）
+ * @return 当前重量（g），未就绪或采样全部超时时返回 0
+ *
+ * 说明：
+ * 1. 对多次采样均值进行去皮（减去 zero_offset3）得到净原始值。
+ * 2. 首次净值超过方向锁定阈值时自动识别并锁定受力方向，统一让重量为正值。
+ * 3. 小于死区阈值（ZERO_DEADBAND_G3）的抖动直接归零，提升静止显示稳定性。
+ * 4. 业务上不允许负重量，若计算结果为负则截断为 0。
+ */
 float getWeight3()
 {
     if (!isScaleReady3)
@@ -139,27 +195,30 @@ float getWeight3()
         return 0.0f;
     }
 
-    const int samples = 5;
+    const int samples = 5;    // 每次读重量时的采样帧数
     int validCount = 0;
     float rawValue = readAverageRaw3(samples, &validCount);
-    if (validCount == 0) return 0.0f;
-    float netValue = rawValue - zero_offset3;
+    if (validCount == 0) return 0.0f;  // 全部超时，返回 0 避免误算
+    float netValue = rawValue - zero_offset3;  // 减去零点偏移，得到净原始值
 
+    // 自动识别受力方向并锁定：
+    // 若受力后净值绝对值足够大且方向为负，后续统一乘 -1，让重量保持正向增长。
     if (!direction_locked3 && fabsf(netValue) > DIRECTION_LOCK_RAW_THRESHOLD3)
     {
         scale_direction3 = (netValue >= 0.0f) ? 1 : -1;
         direction_locked3 = true;
-        Serial.print("HX711_3 direction locked: ");
-        Serial.println(scale_direction3);
     }
 
+    // 净原始值乘方向系数后除以校准因子，得到克重
     float weight = (netValue * scale_direction3) / calibration_factor3;
 
+    // 小抖动直接压到 0，提升静止显示稳定性
     if (fabsf(weight) < ZERO_DEADBAND_G3)
     {
         weight = 0.0f;
     }
 
+    // 业务上不允许负重量
     if (weight < 0)
     {
         weight = 0;
@@ -168,31 +227,42 @@ float getWeight3()
     return weight;
 }
 
+/**
+ * @brief 使用已知砝码重量校准第三个传感器
+ * @param knownWeight 已知砝码的实际重量（单位：克，必须 > 0）
+ *
+ * 说明：
+ * 校准前请确保秤盘已去皮（调用过 tareScale3()）。
+ * 函数通过多次采样计算新的 calibration_factor3（raw/g），
+ * 并将结果打印到串口，方便记录后写入固件常量。
+ * 公式：calibration_factor3 = 净原始值 / 实际重量
+ */
 void calibrateScale3(float knownWeight)
 {
     if (!isScaleReady3)
     {
-        Serial.println("Scale3 not ready!");
         return;
     }
 
-    Serial.print("Calibrating HX711_3 with known weight: ");
-    Serial.print(knownWeight);
-    Serial.println("g");
-
-    const int samples = 10;
+    const int samples = 10;                              // 校准采样帧数（越多越准）
     float currentValue = readAverageRaw3(samples);
-    float netValue = currentValue - zero_offset3;
+    float netValue = currentValue - zero_offset3;        // 减去零点得到净原始值
 
+    // calibration_factor3 = 净原始值 / 实际重量（克）
     if (knownWeight > 0 && netValue != 0.0f)
     {
         calibration_factor3 = netValue / knownWeight;
     }
-
-    Serial.print("HX711_3 new calibration factor: ");
-    Serial.println(calibration_factor3);
 }
 
+/**
+ * @brief 第三个 HX711 去皮：将当前读数设为零点
+ *
+ * 说明：
+ * 1. 读取当前空载平均值作为 zero_offset3，后续重量计算基于此零点。
+ * 2. 重置方向锁定标志，允许重新识别受力方向，适应接线或放置方式调整。
+ * 3. 在 setupHX711_3() 完成初始去皮；运行时也可手动调用，适应环境变化。
+ */
 void tareScale3()
 {
     if (!isScaleReady3)
@@ -200,22 +270,25 @@ void tareScale3()
         return;
     }
 
+    // 采集多帧求均值，帧数越多零点越稳定
     const int samples = 15;
-    zero_offset3 = readAverageRaw3(samples);
+    zero_offset3 = readAverageRaw3(samples);  // 将当前空载均值记为零点偏移
 
+    // 重新去皮后允许再次自动识别方向
     direction_locked3 = false;
 }
 
+/**
+ * @brief 手动设置第三个 HX711 的校准因子
+ * @param factor 校准因子（raw / g），不能为 0
+ *
+ * 适用于已通过其他方式（如 PC 软件）计算出校准因子的场景，
+ * 直接写入而无需放砝码走完整的 calibrateScale3() 流程。
+ */
 void setCalibrationFactor3(float factor)
 {
     if (factor != 0.0f)
     {
         calibration_factor3 = factor;
     }
-}
-
-void hx711GetProbeResult3(float *raw, int *validCount)
-{
-    if (raw)        *raw        = s_probeRaw3;
-    if (validCount) *validCount = s_probeValid3;
 }
