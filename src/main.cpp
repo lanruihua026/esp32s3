@@ -14,6 +14,8 @@
 
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
+#include <ArduinoJson.h>
+#include <Preferences.h>
 #include <cstdlib>
 #include <cstring>
 
@@ -39,12 +41,16 @@ namespace
     constexpr uint8_t CAM_UART_TX_PIN = 17;    // 发送给 ESP32-CAM 的串口 TX 引脚（保留，当前未使用）
     constexpr uint32_t CAM_UART_BAUD = 115200; // 与 ESP32-CAM 通信的波特率
 
-    constexpr int32_t FULL_WEIGHT_G = 1000;                 // 仓位满载阈值（克），超过此值触发告警
-    constexpr int32_t WARNING_RELEASE_HYSTERESIS_G = 100;   // 告警解除回差（克），低于 FULL-100g 才解除，防止抖动反复触发
-    constexpr uint32_t WEIGHT_SAMPLE_INTERVAL_MS = 500;     // 重量采样周期（毫秒）
-    constexpr uint32_t PROPERTY_REPORT_INTERVAL_MS = 10000; // OneNET 属性上报周期（毫秒）
-    constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;      // WiFi 断线后重连尝试间隔（毫秒）
-    constexpr uint32_t WIFI_BOOT_WAIT_MS = 10000;           // 启动阶段等待 WiFi 连接的最长时间（毫秒）
+    // 满载阈值改为运行时变量，支持通过 OneNET MQTT property/set 动态修改并持久化到 NVS。
+    // 初始值为默认值，setup() 中会从 NVS 加载用户上次保存的值。
+    int32_t g_fullWeightG = 1000;
+    // AI 置信度阈值（0~1）：高于此值才允许舵机分拣；0 表示不按置信度过滤（与升级前行为一致）。
+    float g_aiConfThreshold = 0.0f;
+    constexpr int32_t WARNING_RELEASE_HYSTERESIS_G = 100;  // 告警解除回差（克），低于 g_fullWeightG-100g 才解除，防止抖动反复触发
+    constexpr uint32_t WEIGHT_SAMPLE_INTERVAL_MS = 500;    // 重量采样周期（毫秒）
+    constexpr uint32_t PROPERTY_REPORT_INTERVAL_MS = 3000; // OneNET 属性上报周期（毫秒）：3s 上报，配合网页 2s 轮询显著提升数据时效性
+    constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;     // WiFi 断线后重连尝试间隔（毫秒）
+    constexpr uint32_t WIFI_BOOT_WAIT_MS = 5000;           // 启动阶段等待 WiFi 连接的最长时间（毫秒）：连上即退出，最长 5s
 
     // HX711 校准系数（raw ADC 差值 / 克），使用 216g 砝码标定。
     // 修改方法：new_factor = old_factor × (当前显示值 / 实际重量)
@@ -56,6 +62,9 @@ namespace
     constexpr const char *ONENET_PRODUCT_ID = "f45hkc7xC7";                                   // 产品 ID
     constexpr const char *ONENET_DEVICE_NAME = "Box1";                                        // 设备名称
     constexpr const char *ONENET_BASE64_KEY = "T0R5ejYyM1JrT2VuczBkZllINmZuazRicEMxc29xcnk="; // Base64 编码的设备密钥
+
+    // NVS 持久化存储，用于保存满载阈值与 AI 置信度阈值，跨重启保持用户设置。
+    Preferences gPrefs;
 
     // 板载 RGB 仅用于上电后快速关闭，避免默认乱闪。
     Adafruit_NeoPixel boardRgb(RGB_LED_COUNT, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -100,7 +109,7 @@ namespace
      */
     float clampPercent(int32_t weight)
     {
-        float percent = (weight * 100.0f) / static_cast<float>(FULL_WEIGHT_G);
+        float percent = (weight * 100.0f) / static_cast<float>(g_fullWeightG);
         if (percent < 0.0f)
         {
             return 0.0f;
@@ -169,7 +178,7 @@ namespace
         setInitModuleStatus(INIT_MODULE_OLED, INIT_RUNNING, "Init");
         setupOLED();
         setInitModuleStatus(INIT_MODULE_OLED, isOLEDReady() ? INIT_OK : INIT_ERROR, isOLEDReady() ? "Ready" : "Fail");
-        setFullWeight(FULL_WEIGHT_G);
+        setFullWeight(g_fullWeightG);
     }
 
     /**
@@ -264,6 +273,60 @@ namespace
     }
 
     /**
+     * @brief OneNET property/set 回调：解析平台下发的满载阈值、AI 置信度阈值并持久化
+     *
+     * OneJSON 示例：
+     *   {"params":{"overflow_threshold_g":{"value":800},"ai_conf_threshold":{"value":0.65}}}
+     * 两字段可单独或同时下发。
+     */
+    void onPropertySet(const char *payload, unsigned int len)
+    {
+        char buf[384] = {0};
+        unsigned int copyLen = (len < sizeof(buf) - 1) ? len : sizeof(buf) - 1;
+        memcpy(buf, payload, copyLen);
+
+        JsonDocument doc;
+        if (deserializeJson(doc, buf) != DeserializationError::Ok)
+        {
+            Serial.println("[CONFIG] property/set JSON parse error");
+            return;
+        }
+
+        JsonVariant vOver = doc["params"]["overflow_threshold_g"]["value"];
+        if (!vOver.isNull())
+        {
+            int32_t newThreshold = vOver.as<int32_t>();
+            if (newThreshold < 100 || newThreshold > 5000)
+            {
+                Serial.printf("[CONFIG] overflow_threshold_g=%d out of range [100,5000], ignored\n", newThreshold);
+            }
+            else
+            {
+                g_fullWeightG = newThreshold;
+                gPrefs.putInt("full_w", newThreshold);
+                setFullWeight(g_fullWeightG);
+                Serial.printf("[CONFIG] overflow_threshold_g updated to %d g\n", newThreshold);
+            }
+        }
+
+        JsonVariant vAi = doc["params"]["ai_conf_threshold"]["value"];
+        if (!vAi.isNull())
+        {
+            float newAi = vAi.as<float>();
+            if (newAi < 0.0f || newAi > 1.0f)
+            {
+                Serial.printf("[CONFIG] ai_conf_threshold=%.4f out of range [0,1], ignored\n", newAi);
+            }
+            else
+            {
+                g_aiConfThreshold = newAi;
+                gPrefs.putFloat("ai_conf", newAi);
+                Serial.printf("[CONFIG] ai_conf_threshold updated to %.4f\n", newAi);
+            }
+        }
+    }
+
+    /**
      * @brief 初始化 MQTT 模块
      */
     void initMqtt()
@@ -282,6 +345,8 @@ namespace
             OneNetSignMethod::SHA256}; // 签名算法：HMAC-SHA256
 
         oneNetMqttBegin(cfg);
+        // 注册平台下发回调，使网页端满载阈值变更能同步到硬件
+        oneNetSetPropertySetCallback(onPropertySet);
         setInitModuleStatus(INIT_MODULE_MQTT, INIT_OK, "Ready");
     }
 
@@ -398,26 +463,72 @@ namespace
 
     void updateServoByAiResult()
     {
-        // 三路舵机各负责一个仓位，识别到对应类别时转 180°，其余归 0°。
+        // 三路舵机各负责一个仓位，识别到对应类别时触发一次：转 180° 保持 2 秒后归位。
+        // 同一时刻最多一个舵机处于工作状态，归位后须等检测结果清零才允许再次触发。
         // 仓位分配：
-        //   MobilePhone（手机）      → servo1 (GPIO7)  手机仓
-        //   Battery（电池）          → servo2 (GPIO8)  电池仓
-        //   Charger/Earphone/其他    → servo3 (GPIO16) 数码配件仓
-        if (!g_lastAiDetected)
+        //   Battery（电池）          → servo1 (GPIO7)  电池仓
+        //   MobilePhone（手机）      → servo2 (GPIO8)  手机仓
+        //   Charger / Earphone       → servo3 (GPIO16) 数码配件仓
+        static const uint32_t SERVO_HOLD_MS = 2000; // 舵机保持 180° 的时长（毫秒）
+        static int activeServo = 0;                 // 当前激活的舵机（0=无，1/2/3）
+        static uint32_t triggerTimeMs = 0;          // 触发时刻时间戳
+        static bool waitForClear = false;           // 等待检测清零，防止连续重复触发
+
+        uint32_t now = millis();
+
+        // 1. 已有舵机在工作中 → 检查是否到归位时间
+        if (activeServo != 0)
         {
-            // 未检测到目标，全部归位
-            setServoAngle(0);
-            setServoAngle2(0);
-            setServoAngle3(0);
+            if (now - triggerTimeMs >= SERVO_HOLD_MS)
+            {
+                setServoAngle(0);
+                setServoAngle2(0);
+                setServoAngle3(0);
+                activeServo = 0;
+                waitForClear = true;
+            }
             return;
         }
 
-        const bool isMobile  = (strcmp(g_lastAiLabel, "MobilePhone") == 0);
-        const bool isBattery = (strcmp(g_lastAiLabel, "Battery") == 0);
+        // 2. 刚归位，等待识别结果清零（防重复触发）
+        if (waitForClear)
+        {
+            if (!g_lastAiDetected)
+                waitForClear = false;
+            return;
+        }
 
-        setServoAngle (isMobile                    ? 180 : 0); // 手机仓
-        setServoAngle2(isBattery                   ? 180 : 0); // 电池仓
-        setServoAngle3((!isMobile && !isBattery)   ? 180 : 0); // 数码配件仓
+        // 3. 空闲 → 检查是否有新目标
+        if (!g_lastAiDetected)
+            return;
+
+        if (g_aiConfThreshold > 0.0f && g_lastAiConf < g_aiConfThreshold)
+            return;
+
+        const bool isBattery = (strcmp(g_lastAiLabel, "Battery") == 0);
+        const bool isMobile = (strcmp(g_lastAiLabel, "MobilePhone") == 0);
+        const bool isAccessory = (strcmp(g_lastAiLabel, "Charger") == 0 ||
+                                  strcmp(g_lastAiLabel, "Earphone") == 0);
+
+        if (isBattery)
+        {
+            setServoAngle(180); // servo1 → 电池仓
+            activeServo = 1;
+            triggerTimeMs = now;
+        }
+        else if (isMobile)
+        {
+            setServoAngle2(180); // servo2 → 手机仓
+            activeServo = 2;
+            triggerTimeMs = now;
+        }
+        else if (isAccessory)
+        {
+            setServoAngle3(180); // servo3 → 数码配件仓
+            activeServo = 3;
+            triggerTimeMs = now;
+        }
+        // 其他未知标签不触发任何舵机
     }
 
     void updateWeightsAndAlarm()
@@ -432,12 +543,8 @@ namespace
 
         // 满载告警：任一仓位超过阈值即触发，全部低于（阈值 - 回差）才解除。
         // 回差设计避免重量在阈值附近抖动导致告警反复开关。
-        const bool anyFull = (g_currentWeight1 >= FULL_WEIGHT_G)
-                          || (g_currentWeight2 >= FULL_WEIGHT_G)
-                          || (g_currentWeight3 >= FULL_WEIGHT_G);
-        const bool allBelow = (g_currentWeight1 < (FULL_WEIGHT_G - WARNING_RELEASE_HYSTERESIS_G))
-                           && (g_currentWeight2 < (FULL_WEIGHT_G - WARNING_RELEASE_HYSTERESIS_G))
-                           && (g_currentWeight3 < (FULL_WEIGHT_G - WARNING_RELEASE_HYSTERESIS_G));
+        const bool anyFull = (g_currentWeight1 >= g_fullWeightG) || (g_currentWeight2 >= g_fullWeightG) || (g_currentWeight3 >= g_fullWeightG);
+        const bool allBelow = (g_currentWeight1 < (g_fullWeightG - WARNING_RELEASE_HYSTERESIS_G)) && (g_currentWeight2 < (g_fullWeightG - WARNING_RELEASE_HYSTERESIS_G)) && (g_currentWeight3 < (g_fullWeightG - WARNING_RELEASE_HYSTERESIS_G));
 
         if (!g_warningActive && anyFull)
         {
@@ -479,17 +586,25 @@ namespace
         g_lastReportMs = now;
 
         // 构造三个仓位的上报数据包：{当前重量(g), 占满百分比(0~100%), 是否满载}
-        const BoxBinData bin1 = {g_currentWeight1, clampPercent(g_currentWeight1), g_currentWeight1 >= FULL_WEIGHT_G};
-        const BoxBinData bin2 = {g_currentWeight2, clampPercent(g_currentWeight2), g_currentWeight2 >= FULL_WEIGHT_G};
-        const BoxBinData bin3 = {g_currentWeight3, clampPercent(g_currentWeight3), g_currentWeight3 >= FULL_WEIGHT_G};
+        const BoxBinData bin1 = {g_currentWeight1, clampPercent(g_currentWeight1), g_currentWeight1 >= g_fullWeightG};
+        const BoxBinData bin2 = {g_currentWeight2, clampPercent(g_currentWeight2), g_currentWeight2 >= g_fullWeightG};
+        const BoxBinData bin3 = {g_currentWeight3, clampPercent(g_currentWeight3), g_currentWeight3 >= g_fullWeightG};
 
-        oneNetMqttUploadProperties(bin1, bin2, bin3);
+        oneNetMqttUploadProperties(bin1, bin2, bin3, g_fullWeightG, g_aiConfThreshold);
     }
 } // namespace
 
 void setup()
 {
     Serial.begin(115200);
+
+    // 从 NVS 加载用户上次保存的满载阈值，需在 initOled() 之前完成，
+    // 确保 OLED 启动时显示正确的满载基准。
+    gPrefs.begin("sysconf", false);
+    g_fullWeightG = gPrefs.getInt("full_w", 1000);
+    g_aiConfThreshold = gPrefs.getFloat("ai_conf", 0.0f);
+    Serial.printf("[CONFIG] Loaded overflow_threshold_g=%d g, ai_conf_threshold=%.4f from NVS\n",
+                  g_fullWeightG, g_aiConfThreshold);
 
     // 初始化顺序遵循嵌入式常见思路：
     // 先基础外设，再显示，再传感器，再网络，再执行器，最后云端和交互。

@@ -1,4 +1,4 @@
-﻿#include "onenetMqtt.h"
+#include "onenetMqtt.h"
 #include <PubSubClient.h>
 #include <WiFi.h>
 
@@ -28,10 +28,14 @@ namespace
     // 最近一次重连尝试时间，用来避免频繁重连。
     uint32_t gLastConnectAttemptMs = 0;
 
+    // 平台属性下发（property/set）用户回调，nullptr 表示未注册。
+    static void (*gPropertySetCb)(const char *payload, unsigned int len) = nullptr;
+
     // OneNET 物模型相关 Topic 缓存，避免每次上报都重新拼接字符串。
     String gPropertyPostTopic;
     String gPropertyPostReplyTopic;
     String gPropertySetTopic;
+    String gPropertySetReplyTopic; // 设备收到 property/set 后必须在此 topic 回复，否则平台视为命令超时
 
     /**
      * @brief 生成 OneNET token 所需的资源串
@@ -53,13 +57,61 @@ namespace
 
     /**
      * @brief 平台下行消息回调
-     * 当前项目只保留接口，不主动处理平台下发控制命令。
+     *
+     * 收到 thing/property/set 时：
+     * 1. 调用用户注册的处理回调（解析 JSON、更新阈值等）
+     * 2. 向 thing/property/set_reply 发布应答
+     *    ——这是 OneNET 物模型协议的强制要求：
+     *    若设备不回复，平台将该命令标记为超时，后续下发的命令也会被阻塞。
      */
     void mqttCallback(char *topic, byte *payload, unsigned int length)
     {
-        (void)topic;
-        (void)payload;
-        (void)length;
+        if (gPropertySetTopic.length() == 0 || strcmp(topic, gPropertySetTopic.c_str()) != 0)
+        {
+            return; // 不是 property/set 消息，忽略
+        }
+
+        // 先调用用户业务回调（main.cpp 的 onPropertySet）
+        if (gPropertySetCb != nullptr)
+        {
+            gPropertySetCb(reinterpret_cast<const char *>(payload), length);
+        }
+
+        // === OneNET 协议：必须回复 set_reply ===
+        // 从 payload 中提取消息 id，用于回复中与请求配对。
+        // payload 格式：{"id":"xxx","version":"1.0","params":{...}}
+        char msgId[32] = "0";
+        char buf[256] = {0};
+        unsigned int copyLen = (length < sizeof(buf) - 1) ? length : (sizeof(buf) - 1);
+        memcpy(buf, payload, copyLen);
+
+        // 简单字符串搜索提取 "id" 字段值（避免在中断上下文引入重量级 JSON 解析）
+        const char *idKey = strstr(buf, "\"id\"");
+        if (idKey != nullptr)
+        {
+            const char *colon = strchr(idKey + 4, ':');
+            if (colon != nullptr)
+            {
+                const char *p = colon + 1;
+                while (*p == ' ' || *p == '\t') p++; // 跳过空白
+                bool quoted = (*p == '"');
+                if (quoted) p++;
+                size_t k = 0;
+                while (*p && k < sizeof(msgId) - 1)
+                {
+                    if (quoted  && *p == '"')  break;
+                    if (!quoted && (*p == ',' || *p == '}' || *p == ' ')) break;
+                    msgId[k++] = *p++;
+                }
+                msgId[k] = '\0';
+            }
+        }
+
+        char replyBuf[96];
+        snprintf(replyBuf, sizeof(replyBuf),
+                 "{\"id\":\"%s\",\"code\":200,\"msg\":\"success\"}", msgId);
+        bool sent = gMqttClient.publish(gPropertySetReplyTopic.c_str(), replyBuf, false);
+        Serial.printf("[OneNET] SET_REPLY id=%s sent=%d\n", msgId, sent ? 1 : 0);
     }
 
     /**
@@ -109,8 +161,11 @@ namespace
         Serial.println("[OneNET] MQTT OK");
 
         // 连接成功后订阅平台应答和属性下发主题。
-        gMqttClient.subscribe(gPropertyPostReplyTopic.c_str(), 0);
-        gMqttClient.subscribe(gPropertySetTopic.c_str(), 0);
+        // QoS 1：保证至少收到一次，防止平台下发指令因网络抖动丢失。
+        bool subReply = gMqttClient.subscribe(gPropertyPostReplyTopic.c_str(), 1);
+        bool subSet   = gMqttClient.subscribe(gPropertySetTopic.c_str(), 1);
+        Serial.printf("[OneNET] SUB post/reply=%d  property/set=%d\n",
+                      subReply ? 1 : 0, subSet ? 1 : 0);
     }
 }
 
@@ -128,14 +183,15 @@ void oneNetMqttBegin(const OneNetMqttConfig &config)
     gConfig = config;
 
     // OneNET 物模型标准 Topic。
-    gPropertyPostTopic = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/post";
+    gPropertyPostTopic      = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/post";
     gPropertyPostReplyTopic = gPropertyPostTopic + "/reply";
-    gPropertySetTopic = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/set";
+    gPropertySetTopic       = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/set";
+    gPropertySetReplyTopic  = gPropertySetTopic + "_reply"; // 设备回复平台下发的属性设置命令
 
     gMqttClient.setServer(gConfig.host, gConfig.port);
     gMqttClient.setCallback(mqttCallback);
-    // 三个仓位一共要上报 9 个属性，默认缓冲区偏小，这里提前扩容。
-    gMqttClient.setBufferSize(512);
+    // 现在上报 11 个属性（含 overflow_threshold_g、ai_conf_threshold），适当扩容缓冲区。
+    gMqttClient.setBufferSize(768);
 
     gInited = true;
 }
@@ -175,21 +231,20 @@ bool oneNetMqttConnected()
 }
 
 /**
- * @brief 向 OneNET 平台上报三仓物模型属性
+ * @brief 向 OneNET 平台上报三仓物模型属性及阈值
  * @param phone   手机仓数据（重量、百分比、满溢标志）
  * @param mouse   鼠标仓数据（重量、百分比、满溢标志）
  * @param battery 电池仓数据（重量、百分比、满溢标志）
+ * @param overflowThresholdG 满载阈值（克）
+ * @param aiConfThreshold AI 置信度阈值（0~1）
  * @return true 发布成功；false MQTT 未连接或发布失败
- *
- * 说明：
- * 业务含义：
- * 把三个仓位的重量、百分比、满载状态统一打包，
- * 以上报到 OneNET 物模型，供云端页面或小程序查看。
  */
 bool oneNetMqttUploadProperties(
     const BoxBinData &phone,
     const BoxBinData &mouse,
-    const BoxBinData &battery)
+    const BoxBinData &battery,
+    int32_t overflowThresholdG,
+    float aiConfThreshold)
 {
     if (!gMqttClient.connected())
     {
@@ -203,9 +258,11 @@ bool oneNetMqttUploadProperties(
     dtostrf(phone.percent, 1, 2, phonePct);
     dtostrf(mouse.percent, 1, 2, mousePct);
     dtostrf(battery.percent, 1, 2, batteryPct);
+    char aiConfStr[16];
+    dtostrf(aiConfThreshold, 1, 4, aiConfStr);
 
-    // OneJSON 属性上报载荷，包含三个仓位的全部属性。
-    char payload[512];
+    // OneJSON 属性上报载荷：三仓属性 + 满载阈值 + AI 置信度阈值。
+    char payload[720];
     snprintf(payload, sizeof(payload),
              "{\"id\":\"%s\",\"version\":\"1.0\",\"params\":{"
              "\"phone_weight\":{\"value\":%d},"
@@ -216,14 +273,27 @@ bool oneNetMqttUploadProperties(
              "\"mouse_full\":{\"value\":%s},"
              "\"battery_weight\":{\"value\":%d},"
              "\"battery_percent\":{\"value\":%s},"
-             "\"battery_full\":{\"value\":%s}"
+             "\"battery_full\":{\"value\":%s},"
+             "\"overflow_threshold_g\":{\"value\":%d},"
+             "\"ai_conf_threshold\":{\"value\":%s}"
              "}}",
              msgId.c_str(),
              phone.weight, phonePct, phone.full ? "true" : "false",
              mouse.weight, mousePct, mouse.full ? "true" : "false",
-             battery.weight, batteryPct, battery.full ? "true" : "false");
+             battery.weight, batteryPct, battery.full ? "true" : "false",
+             overflowThresholdG,
+             aiConfStr);
 
     bool ok = gMqttClient.publish(gPropertyPostTopic.c_str(), payload, false);
     Serial.println(ok ? "[OneNET] POST OK" : "[OneNET] POST FAIL");
     return ok;
+}
+
+/**
+ * @brief 注册平台属性下发（property/set）回调
+ * @param cb 回调函数指针；传 nullptr 取消注册
+ */
+void oneNetSetPropertySetCallback(void (*cb)(const char *payload, unsigned int len))
+{
+    gPropertySetCb = cb;
 }

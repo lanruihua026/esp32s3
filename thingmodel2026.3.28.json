@@ -112,6 +112,42 @@
       "required": false
     },
     {
+      "identifier": "overflow_threshold_g",
+      "name": "满载阈值",
+      "functionType": "u",
+      "accessMode": "rw",
+      "desc": "",
+      "dataType": {
+        "type": "int32",
+        "specs": {
+          "max": "5000",
+          "min": "0",
+          "step": "",
+          "unit": "克 / g"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    },
+    {
+      "identifier": "ai_conf_threshold",
+      "name": "AI识别置信度阈值",
+      "functionType": "u",
+      "accessMode": "rw",
+      "desc": "低于此置信度的识别结果不触发舵机分拣；0 表示不在本地按置信度过滤",
+      "dataType": {
+        "type": "float",
+        "specs": {
+          "max": "1",
+          "min": "0",
+          "step": "0.01",
+          "unit": "无量纲(0~1)"
+        }
+      },
+      "functionMode": "property",
+      "required": false
+    },
+    {
       "identifier": "phone_full",
       "name": "手机仓满溢状态",
       "functionType": "u",

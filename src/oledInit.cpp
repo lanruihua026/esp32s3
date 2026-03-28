@@ -308,7 +308,10 @@ static void showBinWeightPage()
     }
 
     oledDisplay.setCursor(0, 56);
-    oledDisplay.println("BTN1<-   ->BTN2");
+    // 显示当前满载阈值，方便调试和确认网页端下发的阈值是否已生效
+    char limBuf[18];
+    snprintf(limBuf, sizeof(limBuf), "Lim:%4ldg  <BTN>", (long)fullWeight);
+    oledDisplay.println(limBuf);
 
     oledDisplay.display();
 }
@@ -345,7 +348,10 @@ static void showSystemStatusPage()
     oledDisplay.println(g_oledReady ? "OK" : "ERROR");
 
     oledDisplay.setCursor(0, 55);
-    oledDisplay.print("BTN1<-   ->BTN2");
+    // 显示当前满载阈值，方便查看网页端下发命令是否已生效
+    char limBuf[18];
+    snprintf(limBuf, sizeof(limBuf), "Limit:%5ldg", (long)fullWeight);
+    oledDisplay.print(limBuf);
 
     oledDisplay.display();
 }

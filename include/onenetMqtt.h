@@ -1,4 +1,4 @@
-﻿#ifndef _ONENET_MQTT_H_
+#ifndef _ONENET_MQTT_H_
 #define _ONENET_MQTT_H_
 
 #include "onenetToken.h"
@@ -66,14 +66,31 @@ struct BoxBinData
 };
 
 /**
- * @brief 以 OneJSON 属性上报格式发布三仓数据（共 9 个属性）
- * @param phone   手机仓数据
- * @param mouse   鼠标仓数据
- * @param battery 电池仓数据
+ * @brief 以 OneJSON 属性上报格式发布三仓数据 + 满载阈值 + AI 置信度阈值（共 11 个属性）
+ * @param phone             手机仓数据
+ * @param mouse             鼠标仓数据
+ * @param battery           电池仓数据
+ * @param overflowThresholdG 当前满载阈值（克），同步上报使云平台显示实际值而非 undefined
+ * @param aiConfThreshold   当前 AI 识别置信度阈值（0~1），同步上报供云端与网页展示
  */
 bool oneNetMqttUploadProperties(
     const BoxBinData &phone,
     const BoxBinData &mouse,
-    const BoxBinData &battery);
+    const BoxBinData &battery,
+    int32_t overflowThresholdG,
+    float aiConfThreshold);
+
+/**
+ * @brief 注册平台属性下发（property/set）回调
+ *
+ * 当 OneNET 平台通过 MQTT 下发属性设置消息时，回调函数将被调用。
+ * @param cb 回调函数指针，参数为消息载荷（非 null 结尾）和长度；传 nullptr 取消注册。
+ *
+ * 使用示例（main.cpp 中）：
+ *   oneNetSetPropertySetCallback([](const char* payload, unsigned int len) {
+ *       // 解析 OneJSON payload，更新本地阈值
+ *   });
+ */
+void oneNetSetPropertySetCallback(void (*cb)(const char *payload, unsigned int len));
 
 #endif
