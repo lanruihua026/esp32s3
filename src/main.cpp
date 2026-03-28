@@ -16,6 +16,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 
@@ -123,6 +124,39 @@ namespace
 
     /** 在下发阈值变更后立即上报物模型，使平台「最新数据」与网页轮询尽快一致 */
     void reportPropertiesNow();
+
+    /** 去掉标签尾部空白，避免 strcmp 与 YOLO 类名不一致 */
+    void trimLabelInPlace(char *s)
+    {
+        if (s == nullptr || s[0] == '\0')
+        {
+            return;
+        }
+        size_t n = strlen(s);
+        while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r'))
+        {
+            s[--n] = '\0';
+        }
+    }
+
+    /** 与训练侧类名比对时忽略大小写，避免 Battery / battery 导致不触发 */
+    bool labelEqualsCi(const char *a, const char *b)
+    {
+        if (a == nullptr || b == nullptr)
+        {
+            return false;
+        }
+        while (*a != '\0' && *b != '\0')
+        {
+            const unsigned char ca = static_cast<unsigned char>(*a++);
+            const unsigned char cb = static_cast<unsigned char>(*b++);
+            if (std::tolower(ca) != std::tolower(cb))
+            {
+                return false;
+            }
+        }
+        return *a == *b;
+    }
 
     /**
      * @brief 判断三路 HX711 是否全部初始化成功
@@ -430,6 +464,8 @@ namespace
                 labelLen = sizeof(label) - 1; // 防止标签过长溢出缓冲区
             }
             memcpy(label, p1 + 1, labelLen); // 从 p1+1 处拷贝 labelLen 个字节作为标签
+            label[sizeof(label) - 1] = '\0';
+            trimLabelInPlace(label);
 
             float conf = static_cast<float>(atof(p2 + 1));
             setAiState(true, label, conf);
@@ -486,15 +522,19 @@ namespace
     void updateServoByAiResult()
     {
         // 三路舵机各负责一个仓位，识别到对应类别时触发一次：转 180° 保持 2 秒后归位。
-        // 同一时刻最多一个舵机处于工作状态，归位后须等检测结果清零才允许再次触发。
+        // 同一时刻仅一路为 180°，其余强制 0°，避免多路同时受力或误动。
+        // 再触发条件：收到 NONE、识别类别变化、或超时（CAM 持续 DET 时不会发 NONE，仅靠 NONE 会永久锁死）。
         // 仓位分配：
         //   Battery（电池）          → servo1 (GPIO7)  电池仓
         //   MobilePhone（手机）      → servo2 (GPIO8)  手机仓
         //   Charger / Earphone       → servo3 (GPIO16) 数码配件仓
-        static const uint32_t SERVO_HOLD_MS = 2000; // 舵机保持 180° 的时长（毫秒）
-        static int activeServo = 0;                 // 当前激活的舵机（0=无，1/2/3）
-        static uint32_t triggerTimeMs = 0;          // 触发时刻时间戳
-        static bool waitForClear = false;           // 等待检测清零，防止连续重复触发
+        static const uint32_t SERVO_HOLD_MS = 2000;           // 舵机保持 180° 的时长（毫秒）
+        static const uint32_t REARM_SAME_VIEW_MS = 3500;      // 同类持续在画面中时的再允许分拣间隔（略大于 CAM 推理周期）
+        static int activeServo = 0;                           // 当前激活的舵机（0=无，1/2/3）
+        static uint32_t triggerTimeMs = 0;                    // 触发时刻时间戳
+        static bool waitForRearm = false;                     // 归位后等待允许再次分拣
+        static char labelAtLastSort[sizeof(g_lastAiLabel)] = "";
+        static uint32_t sortCompletedMs = 0;                 // 上次归位完成时刻
 
         uint32_t now = millis();
 
@@ -503,21 +543,54 @@ namespace
         {
             if (now - triggerTimeMs >= SERVO_HOLD_MS)
             {
-                setServoAngle(0);
-                setServoAngle2(0);
-                setServoAngle3(0);
+                if (activeServo == 1)
+                {
+                    setServoAngle(0);
+                    Serial.printf("[SERVO] HOME ch=1 GPIO%d angle=0 deg (hold %lu ms done)\n", SERVO_PIN,
+                                  static_cast<unsigned long>(SERVO_HOLD_MS));
+                }
+                else if (activeServo == 2)
+                {
+                    setServoAngle2(0);
+                    Serial.printf("[SERVO] HOME ch=2 GPIO%d angle=0 deg (hold %lu ms done)\n", SERVO_PIN_2,
+                                  static_cast<unsigned long>(SERVO_HOLD_MS));
+                }
+                else if (activeServo == 3)
+                {
+                    setServoAngle3(0);
+                    Serial.printf("[SERVO] HOME ch=3 GPIO%d angle=0 deg (hold %lu ms done)\n", SERVO_PIN_3,
+                                  static_cast<unsigned long>(SERVO_HOLD_MS));
+                }
                 activeServo = 0;
-                waitForClear = true;
+                waitForRearm = true;
+                strncpy(labelAtLastSort, g_lastAiLabel, sizeof(labelAtLastSort) - 1);
+                labelAtLastSort[sizeof(labelAtLastSort) - 1] = '\0';
+                sortCompletedMs = now;
             }
             return;
         }
 
-        // 2. 刚归位，等待识别结果清零（防重复触发）
-        if (waitForClear)
+        // 2. 刚归位：允许再次分拣当且仅当（自动分拣常见三种情况）
+        if (waitForRearm)
         {
             if (!g_lastAiDetected)
-                waitForClear = false;
-            return;
+            {
+                waitForRearm = false;
+            }
+            else if (!labelEqualsCi(g_lastAiLabel, labelAtLastSort))
+            {
+                // 模型在下一帧判成另一类：视为新一次分拣，不必等 NONE
+                waitForRearm = false;
+            }
+            else if ((now - sortCompletedMs) >= REARM_SAME_VIEW_MS)
+            {
+                // 画面里仍是同类且一直无 NONE：超时解锁，避免永远不触发
+                waitForRearm = false;
+            }
+            else
+            {
+                return;
+            }
         }
 
         // 3. 空闲 → 检查是否有新目标
@@ -527,28 +600,43 @@ namespace
         if (g_aiConfThreshold > 0.0f && g_lastAiConf < g_aiConfThreshold)
             return;
 
-        const bool isBattery = (strcmp(g_lastAiLabel, "Battery") == 0);
-        const bool isMobile = (strcmp(g_lastAiLabel, "MobilePhone") == 0);
-        const bool isAccessory = (strcmp(g_lastAiLabel, "Charger") == 0 ||
-                                  strcmp(g_lastAiLabel, "Earphone") == 0);
+        const bool isBattery = labelEqualsCi(g_lastAiLabel, "Battery");
+        const bool isMobile = labelEqualsCi(g_lastAiLabel, "MobilePhone");
+        const bool isAccessory = labelEqualsCi(g_lastAiLabel, "Charger") ||
+                                 labelEqualsCi(g_lastAiLabel, "Earphone");
 
         if (isBattery)
         {
-            setServoAngle(180); // servo1 → 电池仓
+            setServoAngle(180);
+            setServoAngle2(0);
+            setServoAngle3(0);
             activeServo = 1;
             triggerTimeMs = now;
+            Serial.printf("[SERVO] TRIGGER ch=1 GPIO%d angle=180 deg label=%s conf=%.1f%% (hold %lu ms)\n",
+                          SERVO_PIN, g_lastAiLabel, g_lastAiConf * 100.0f,
+                          static_cast<unsigned long>(SERVO_HOLD_MS));
         }
         else if (isMobile)
         {
-            setServoAngle2(180); // servo2 → 手机仓
+            setServoAngle(0);
+            setServoAngle2(180);
+            setServoAngle3(0);
             activeServo = 2;
             triggerTimeMs = now;
+            Serial.printf("[SERVO] TRIGGER ch=2 GPIO%d angle=180 deg label=%s conf=%.1f%% (hold %lu ms)\n",
+                          SERVO_PIN_2, g_lastAiLabel, g_lastAiConf * 100.0f,
+                          static_cast<unsigned long>(SERVO_HOLD_MS));
         }
         else if (isAccessory)
         {
-            setServoAngle3(180); // servo3 → 数码配件仓
+            setServoAngle(0);
+            setServoAngle2(0);
+            setServoAngle3(180);
             activeServo = 3;
             triggerTimeMs = now;
+            Serial.printf("[SERVO] TRIGGER ch=3 GPIO%d angle=180 deg label=%s conf=%.1f%% (hold %lu ms)\n",
+                          SERVO_PIN_3, g_lastAiLabel, g_lastAiConf * 100.0f,
+                          static_cast<unsigned long>(SERVO_HOLD_MS));
         }
         // 其他未知标签不触发任何舵机
     }
