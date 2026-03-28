@@ -121,6 +121,9 @@ namespace
         return percent;
     }
 
+    /** 在下发阈值变更后立即上报物模型，使平台「最新数据」与网页轮询尽快一致 */
+    void reportPropertiesNow();
+
     /**
      * @brief 判断三路 HX711 是否全部初始化成功
      * @return true 三路均可用；false 至少一路失败
@@ -275,9 +278,9 @@ namespace
     /**
      * @brief OneNET property/set 回调：解析平台下发的满载阈值、AI 置信度阈值并持久化
      *
-     * OneJSON 示例：
-     *   {"params":{"overflow_threshold_g":{"value":800},"ai_conf_threshold":{"value":0.65}}}
-     * 两字段可单独或同时下发。
+     * 标准 OneJSON：params.xxx.value。
+     * REST「设置设备属性」经平台转发后，常见为扁平：params.xxx 直接为数值（与 oneNet.js 请求体一致），
+     * 仅解析 .value 会漏掉下发，导致云端与设备永不刷新。
      */
     void onPropertySet(const char *payload, unsigned int len)
     {
@@ -292,9 +295,16 @@ namespace
             return;
         }
 
-        JsonVariant vOver = doc["params"]["overflow_threshold_g"]["value"];
-        if (!vOver.isNull())
+        bool changed = false;
+
+        JsonVariant pOver = doc["params"]["overflow_threshold_g"];
+        if (!pOver.isNull())
         {
+            JsonVariant vOver = pOver["value"];
+            if (vOver.isNull())
+            {
+                vOver = pOver;
+            }
             int32_t newThreshold = vOver.as<int32_t>();
             if (newThreshold < 100 || newThreshold > 5000)
             {
@@ -306,12 +316,18 @@ namespace
                 gPrefs.putInt("full_w", newThreshold);
                 setFullWeight(g_fullWeightG);
                 Serial.printf("[CONFIG] overflow_threshold_g updated to %d g\n", newThreshold);
+                changed = true;
             }
         }
 
-        JsonVariant vAi = doc["params"]["ai_conf_threshold"]["value"];
-        if (!vAi.isNull())
+        JsonVariant pAi = doc["params"]["ai_conf_threshold"];
+        if (!pAi.isNull())
         {
+            JsonVariant vAi = pAi["value"];
+            if (vAi.isNull())
+            {
+                vAi = pAi;
+            }
             float newAi = vAi.as<float>();
             if (newAi < 0.0f || newAi > 1.0f)
             {
@@ -322,7 +338,13 @@ namespace
                 g_aiConfThreshold = newAi;
                 gPrefs.putFloat("ai_conf", newAi);
                 Serial.printf("[CONFIG] ai_conf_threshold updated to %.4f\n", newAi);
+                changed = true;
             }
+        }
+
+        if (changed)
+        {
+            reportPropertiesNow();
         }
     }
 
@@ -590,6 +612,18 @@ namespace
         const BoxBinData bin2 = {g_currentWeight2, clampPercent(g_currentWeight2), g_currentWeight2 >= g_fullWeightG};
         const BoxBinData bin3 = {g_currentWeight3, clampPercent(g_currentWeight3), g_currentWeight3 >= g_fullWeightG};
 
+        oneNetMqttUploadProperties(bin1, bin2, bin3, g_fullWeightG, g_aiConfThreshold);
+    }
+
+    void reportPropertiesNow()
+    {
+        if (!oneNetMqttConnected())
+        {
+            return;
+        }
+        const BoxBinData bin1 = {g_currentWeight1, clampPercent(g_currentWeight1), g_currentWeight1 >= g_fullWeightG};
+        const BoxBinData bin2 = {g_currentWeight2, clampPercent(g_currentWeight2), g_currentWeight2 >= g_fullWeightG};
+        const BoxBinData bin3 = {g_currentWeight3, clampPercent(g_currentWeight3), g_currentWeight3 >= g_fullWeightG};
         oneNetMqttUploadProperties(bin1, bin2, bin3, g_fullWeightG, g_aiConfThreshold);
     }
 } // namespace
