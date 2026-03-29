@@ -192,6 +192,8 @@ void oneNetMqttBegin(const OneNetMqttConfig &config)
     gMqttClient.setCallback(mqttCallback);
     // 现在上报 11 个属性（含 overflow_threshold_g、ai_conf_threshold），适当扩容缓冲区。
     gMqttClient.setBufferSize(768);
+    // 弱网/离线时缩短单次阻塞，避免长时间卡住 loop（秒；与 tryConnect 3s 节流配合）
+    gMqttClient.setSocketTimeout(5);
 
     gInited = true;
 }

@@ -1,5 +1,10 @@
 #include "servoControl.h"
 
+// 编译可加 -DSERVO_FULL_SELFTEST_AT_BOOT=0 跳过完整自检，仅保留 initServo() 内回零（加快启动）
+#ifndef SERVO_FULL_SELFTEST_AT_BOOT
+#define SERVO_FULL_SELFTEST_AT_BOOT 1
+#endif
+
 namespace
 {
     /**
@@ -145,7 +150,7 @@ namespace
      * 顺序为 0° -> 90° -> 0°，逐路执行。
      * 逐路动作比三路同时动作更容易看出哪一路异常，也更适合现场调试。
      */
-    void runSingleServoSelfTest(ServoRuntime &servo)
+    void runSingleServoSelfTest(ServoRuntime &servo, uint16_t settleMs)
     {
         if (!servo.ready)
         {
@@ -155,15 +160,15 @@ namespace
 
         Serial.printf("[SERVO_SELFTEST] %s pin=%u -> 0 deg\n", servo.name, servo.pin);
         writeServoAngle(servo, 0);
-        delay(SERVO_SETTLE_MS);
+        delay(settleMs);
 
         Serial.printf("[SERVO_SELFTEST] %s pin=%u -> %d deg\n", servo.name, servo.pin, SERVO_SELFTEST_ANGLE);
         writeServoAngle(servo, SERVO_SELFTEST_ANGLE);
-        delay(SERVO_SETTLE_MS);
+        delay(settleMs);
 
         Serial.printf("[SERVO_SELFTEST] %s pin=%u -> 0 deg\n", servo.name, servo.pin);
         writeServoAngle(servo, 0);
-        delay(SERVO_SETTLE_MS);
+        delay(settleMs);
     }
 } // namespace
 
@@ -197,7 +202,12 @@ void setServoAngle3(int angle)
 
 void runServoSelfTest()
 {
-    runSingleServoSelfTest(g_servo1);
-    runSingleServoSelfTest(g_servo2);
-    runSingleServoSelfTest(g_servo3);
+#if SERVO_FULL_SELFTEST_AT_BOOT
+    constexpr uint16_t kSettle = SERVO_SETTLE_MS;
+    runSingleServoSelfTest(g_servo1, kSettle);
+    runSingleServoSelfTest(g_servo2, kSettle);
+    runSingleServoSelfTest(g_servo3, kSettle);
+#else
+    Serial.println("[SERVO_SELFTEST] full self-test disabled (SERVO_FULL_SELFTEST_AT_BOOT=0), homing only");
+#endif
 }

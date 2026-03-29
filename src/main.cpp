@@ -9,7 +9,7 @@
  * 4. 重量数据通过 OneNET MQTT 定期上报至云平台，供远程监控使用。
  * 5. OLED 屏幕实时显示系统状态、识别结果和仓位重量，支持按键翻页。
  *
- * 初始化顺序：指示器 → 摄像头串口 → OLED → HX711 → WiFi → 舵机 → 按键 → MQTT
+ * 初始化顺序：指示器 → 摄像头串口 → OLED → 尽早 WiFi.begin → HX711 → WiFi 等待 → 舵机 → 按键 → MQTT
  */
 
 #include <Arduino.h>
@@ -17,6 +17,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -26,6 +27,7 @@
 #include "hx711.h"
 #include "hx711_2.h"
 #include "hx711_3.h"
+#include "hx711BootConfig.h"
 #include "oledInit.h"
 #include "onenetMqtt.h"
 #include "servoControl.h"
@@ -70,6 +72,7 @@ namespace
 
     // NVS 持久化存储，用于保存满载阈值与 AI 置信度阈值，跨重启保持用户设置。
     Preferences gPrefs;
+    bool g_prefsOk = false;
 
     // 板载 RGB 仅用于上电后快速关闭，避免默认乱闪。
     Adafruit_NeoPixel boardRgb(RGB_LED_COUNT, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -246,6 +249,12 @@ namespace
         float defaultScale,
         const char *chLabel)
     {
+        if (!g_prefsOk)
+        {
+            setScale(defaultScale);
+            Serial.printf("[HX711] %s: NVS unavailable, default calibration_factor=%.2f\n", chLabel, defaultScale);
+            return;
+        }
         if (gPrefs.isKey(nvsKey))
         {
             float saved = gPrefs.getFloat(nvsKey, defaultScale);
@@ -276,6 +285,15 @@ namespace
         float (*getLoadMag)(),
         const char *chLabel)
     {
+        if (!g_prefsOk)
+        {
+            Serial.printf("[HX711] %s: NVS unavailable, tare in RAM only\n", chLabel);
+            if (doTare())
+            {
+                Serial.printf("[HX711] %s: tare OK, offset not persisted\n", chLabel);
+            }
+            return;
+        }
         if (gPrefs.isKey(nvsKey))
         {
             float savedOffset = gPrefs.getFloat(nvsKey, 0.0f);
@@ -334,6 +352,12 @@ namespace
         // 三路全部可用才认为称重模块整体正常。
         setInitModuleStatus(INIT_MODULE_HX711, INIT_RUNNING, "Probe");
 
+        if (HX711_BOOT_STRATEGY == 1)
+        {
+            showBootProgress(18, "HX711 warm");
+            delay(HX711_GLOBAL_WARMUP_MS);
+        }
+
         showBootProgress(20, "HX711_1");
         g_hx711_1InitOk = setupHX711();
         showBootProgress(28, "HX711_1 Cal");
@@ -369,18 +393,25 @@ namespace
      */
     void initWiFiWithTimeout()
     {
-        // WiFi 允许在启动阶段等待一段时间，
-        // 超时也继续进入系统，避免整机卡死在联网阶段。
+        // WiFi 在 initOled() 后已通过 startWiFiConnect() 发起；此处仅按总预算等待，
+        // 预算从首次 WiFi.begin 起算，可与 HX711 初始化重叠。
         setInitModuleStatus(INIT_MODULE_WIFI, INIT_RUNNING, "Connecting");
         showBootProgress(45, "WiFi");
-        setupWiFi();
 
-        const uint32_t startMs = millis();
-        while (WiFi.status() != WL_CONNECTED && (millis() - startMs) < WIFI_BOOT_WAIT_MS)
+        if (!wifiBootConnectStarted())
         {
-            delay(200);
+            startWiFiConnect();
+        }
+
+        const uint32_t startMs = wifiBootConnectStartMillis();
+        while (WiFi.status() != WL_CONNECTED)
+        {
             const uint32_t elapsed = millis() - startMs;
-            // 将已等待时间线性映射到进度条 45%~65% 区间，让用户看到联网进度
+            if (elapsed >= WIFI_BOOT_WAIT_MS)
+            {
+                break;
+            }
+            delay(200);
             const uint8_t progress = 45 + static_cast<uint8_t>((elapsed * 20UL) / WIFI_BOOT_WAIT_MS);
             showBootProgress(progress, "WiFi");
         }
@@ -394,7 +425,10 @@ namespace
         else
         {
             g_wifiInitTimeout = true;
-            setInitModuleStatus(INIT_MODULE_WIFI, INIT_TIMEOUT, "10s timeout");
+            char detail[17];
+            const unsigned long sec = WIFI_BOOT_WAIT_MS / 1000UL;
+            snprintf(detail, sizeof(detail), "%lus timeout", sec);
+            setInitModuleStatus(INIT_MODULE_WIFI, INIT_TIMEOUT, detail);
             showBootProgress(65, "WiFi Timeout");
         }
     }
@@ -466,7 +500,10 @@ namespace
             else
             {
                 g_fullWeightG = newThreshold;
-                gPrefs.putInt("full_w", newThreshold);
+                if (g_prefsOk)
+                {
+                    gPrefs.putInt("full_w", newThreshold);
+                }
                 setFullWeight(g_fullWeightG);
                 Serial.printf("[CONFIG] overflow_threshold_g updated to %d g\n", newThreshold);
                 changed = true;
@@ -489,7 +526,10 @@ namespace
             else
             {
                 g_aiConfThreshold = newAi;
-                gPrefs.putFloat("ai_conf", newAi);
+                if (g_prefsOk)
+                {
+                    gPrefs.putFloat("ai_conf", newAi);
+                }
                 Serial.printf("[CONFIG] ai_conf_threshold updated to %.4f\n", newAi);
                 changed = true;
             }
@@ -864,9 +904,14 @@ namespace
             g_calReadyCh1 = false;
             if (tareScale())
             {
-                gPrefs.putFloat("hx1_zero", getZeroOffset());
+                if (g_prefsOk)
+                {
+                    gPrefs.putFloat("hx1_zero", getZeroOffset());
+                }
                 g_calReadyCh1 = true;
-                Serial.printf("[CAL] TARE1 OK: zero_offset=%.1f saved\n", getZeroOffset());
+                Serial.printf(g_prefsOk ? "[CAL] TARE1 OK: zero_offset=%.1f saved\n"
+                                        : "[CAL] TARE1 OK: zero_offset=%.1f (NVS unavailable, not saved)\n",
+                              getZeroOffset());
             }
             else
             {
@@ -880,9 +925,14 @@ namespace
             g_calReadyCh2 = false;
             if (tareScale2())
             {
-                gPrefs.putFloat("hx2_zero", getZeroOffset2());
+                if (g_prefsOk)
+                {
+                    gPrefs.putFloat("hx2_zero", getZeroOffset2());
+                }
                 g_calReadyCh2 = true;
-                Serial.printf("[CAL] TARE2 OK: zero_offset=%.1f saved\n", getZeroOffset2());
+                Serial.printf(g_prefsOk ? "[CAL] TARE2 OK: zero_offset=%.1f saved\n"
+                                        : "[CAL] TARE2 OK: zero_offset=%.1f (NVS unavailable, not saved)\n",
+                              getZeroOffset2());
             }
             else
             {
@@ -896,9 +946,14 @@ namespace
             g_calReadyCh3 = false;
             if (tareScale3())
             {
-                gPrefs.putFloat("hx3_zero", getZeroOffset3());
+                if (g_prefsOk)
+                {
+                    gPrefs.putFloat("hx3_zero", getZeroOffset3());
+                }
                 g_calReadyCh3 = true;
-                Serial.printf("[CAL] TARE3 OK: zero_offset=%.1f saved\n", getZeroOffset3());
+                Serial.printf(g_prefsOk ? "[CAL] TARE3 OK: zero_offset=%.1f saved\n"
+                                        : "[CAL] TARE3 OK: zero_offset=%.1f (NVS unavailable, not saved)\n",
+                              getZeroOffset3());
             }
             else
             {
@@ -924,9 +979,14 @@ namespace
             Serial.printf("[CAL] CAL1: calibrating CH1 with %.1fg...\n", w);
             if (calibrateScale(w))
             {
-                gPrefs.putFloat("hx1_scale", getCalibrationFactor());
+                if (g_prefsOk)
+                {
+                    gPrefs.putFloat("hx1_scale", getCalibrationFactor());
+                }
                 g_calReadyCh1 = false;
-                Serial.printf("[CAL] CAL1 OK: factor=%.2f saved to NVS\n", getCalibrationFactor());
+                Serial.printf(g_prefsOk ? "[CAL] CAL1 OK: factor=%.2f saved to NVS\n"
+                                        : "[CAL] CAL1 OK: factor=%.2f (NVS unavailable, not saved)\n",
+                              getCalibrationFactor());
             }
             else
             {
@@ -950,9 +1010,14 @@ namespace
             Serial.printf("[CAL] CAL2: calibrating CH2 with %.1fg...\n", w);
             if (calibrateScale2(w))
             {
-                gPrefs.putFloat("hx2_scale", getCalibrationFactor2());
+                if (g_prefsOk)
+                {
+                    gPrefs.putFloat("hx2_scale", getCalibrationFactor2());
+                }
                 g_calReadyCh2 = false;
-                Serial.printf("[CAL] CAL2 OK: factor=%.2f saved to NVS\n", getCalibrationFactor2());
+                Serial.printf(g_prefsOk ? "[CAL] CAL2 OK: factor=%.2f saved to NVS\n"
+                                        : "[CAL] CAL2 OK: factor=%.2f (NVS unavailable, not saved)\n",
+                              getCalibrationFactor2());
             }
             else
             {
@@ -976,9 +1041,14 @@ namespace
             Serial.printf("[CAL] CAL3: calibrating CH3 with %.1fg...\n", w);
             if (calibrateScale3(w))
             {
-                gPrefs.putFloat("hx3_scale", getCalibrationFactor3());
+                if (g_prefsOk)
+                {
+                    gPrefs.putFloat("hx3_scale", getCalibrationFactor3());
+                }
                 g_calReadyCh3 = false;
-                Serial.printf("[CAL] CAL3 OK: factor=%.2f saved to NVS\n", getCalibrationFactor3());
+                Serial.printf(g_prefsOk ? "[CAL] CAL3 OK: factor=%.2f saved to NVS\n"
+                                        : "[CAL] CAL3 OK: factor=%.2f (NVS unavailable, not saved)\n",
+                              getCalibrationFactor3());
             }
             else
             {
@@ -1038,17 +1108,25 @@ void setup()
 
     // 从 NVS 加载用户上次保存的满载阈值，需在 initOled() 之前完成，
     // 确保 OLED 启动时显示正确的满载基准。
-    gPrefs.begin("sysconf", false);
-    g_fullWeightG = gPrefs.getInt("full_w", 1000);
-    g_aiConfThreshold = gPrefs.getFloat("ai_conf", 0.0f);
-    Serial.printf("[CONFIG] Loaded overflow_threshold_g=%d g, ai_conf_threshold=%.4f from NVS\n",
-                  g_fullWeightG, g_aiConfThreshold);
+    g_prefsOk = gPrefs.begin("sysconf", false);
+    if (!g_prefsOk)
+    {
+        Serial.println("[NVS] Preferences begin failed; using defaults, persistence disabled");
+    }
+    if (g_prefsOk)
+    {
+        g_fullWeightG = gPrefs.getInt("full_w", 1000);
+        g_aiConfThreshold = gPrefs.getFloat("ai_conf", 0.0f);
+    }
+    Serial.printf("[CONFIG] overflow_threshold_g=%d g, ai_conf_threshold=%.4f (%s)\n",
+                  g_fullWeightG, g_aiConfThreshold, g_prefsOk ? "from NVS" : "defaults");
 
     // 初始化顺序遵循嵌入式常见思路：
     // 先基础外设，再显示，再传感器，再网络，再执行器，最后云端和交互。
     initBoardIndicators();
     initCameraUart();
     initOled();
+    startWiFiConnect();
     initHx711Modules();
     initWiFiWithTimeout();
     initServoModule();

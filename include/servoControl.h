@@ -44,6 +44,7 @@ void setServoAngle3(int angle);
  * 3. 机械结构是否存在卡滞。
  *
  * 自检采用“逐路动作”的方式，便于现场直接观察是哪一路不转或串动。
+ * 编译选项 -DSERVO_FULL_SELFTEST_AT_BOOT=0 可跳过本自检；initServo() 仍会回零。
  */
 void runServoSelfTest();
 

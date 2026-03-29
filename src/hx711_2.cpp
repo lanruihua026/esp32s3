@@ -1,4 +1,5 @@
 #include "hx711_2.h"
+#include "hx711BootConfig.h"
 
 #include <math.h>
 
@@ -69,8 +70,10 @@ bool setupHX711_2()
     pinMode(HX711_DT2, INPUT);
     pinMode(HX711_SCK2, OUTPUT);
     digitalWrite(HX711_SCK2, LOW);
-    // 上电后给传感器一点预热时间，降低初始漂移影响
-    delay(1200);
+    if (HX711_BOOT_STRATEGY == 0)
+    {
+        delay(HX711_PER_CHANNEL_WARMUP_MS);
+    }
     // 丢弃若干帧启动阶段的不稳定数据
     for (int i = 0; i < 8; ++i)
     {
