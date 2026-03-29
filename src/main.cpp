@@ -191,6 +191,8 @@ namespace
         }
 
         setRuntimeHealth(wifiConnected, g_wifiInitTimeout, allHx711Ready(), oneNetMqttConnected());
+        setHx711ChannelReady(g_hx711_1InitOk, g_hx711_2InitOk, g_hx711_3InitOk);
+        setAiConfThreshold(g_aiConfThreshold);
     }
 
     /**
@@ -413,7 +415,9 @@ namespace
             }
             delay(200);
             const uint8_t progress = 45 + static_cast<uint8_t>((elapsed * 20UL) / WIFI_BOOT_WAIT_MS);
-            showBootProgress(progress, "WiFi");
+            char wifiLine[17];
+            snprintf(wifiLine, sizeof(wifiLine), "WiFi %lus", static_cast<unsigned long>(elapsed / 1000UL));
+            showBootProgress(progress, wifiLine);
         }
 
         if (WiFi.status() == WL_CONNECTED)
@@ -440,9 +444,23 @@ namespace
         // 舵机属于执行器，放在网络之后初始化，
         // 这样供电更稳定，且自检动作更容易观察。
         setInitModuleStatus(INIT_MODULE_SERVO, INIT_RUNNING, "SelfTest");
-        showBootProgress(72, "Servo");
+        showBootProgress(72, "Srv Init");
         initServo();
-        runServoSelfTest();
+        runServoSelfTest([](uint8_t channel)
+                         {
+                             if (!isOLEDReady())
+                             {
+                                 return;
+                             }
+                             if (channel == 0)
+                             {
+                                 showBootProgress(72, "Srv Home");
+                                 return;
+                             }
+                             char line[17];
+                             snprintf(line, sizeof(line), "Servo %u", static_cast<unsigned>(channel));
+                             showBootProgress(72, line);
+                         });
         setInitModuleStatus(INIT_MODULE_SERVO, INIT_OK, "Ready");
     }
 

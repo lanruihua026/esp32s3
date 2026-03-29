@@ -1,5 +1,6 @@
-﻿#include "oledInit.h"
+#include "oledInit.h"
 #include <WiFi.h>
+#include <cmath>
 #include <cstring>
 
 Adafruit_SH1106G oledDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
@@ -39,6 +40,20 @@ static bool g_wifiInitTimeout = false;
 static bool g_hx711Ok = false;
 static bool g_mqttOk = false;
 
+// 三路 HX711 是否初始化成功（用于重量页分路与状态页摘要）
+static bool g_hxChOk[3] = {true, true, true};
+
+// AI 置信度阈值（与 main g_aiConfThreshold 同步）
+static float g_aiConfThrDisplay = -1.0f;
+
+static void drawPageIndicator()
+{
+    char p[5];
+    snprintf(p, sizeof(p), "%u/3", static_cast<unsigned>(g_oledPage + 1U));
+    oledDisplay.setCursor(106, 8);
+    oledDisplay.print(p);
+}
+
 static const char *moduleStatusText(InitModuleStatus status)
 {
     switch (status)
@@ -68,6 +83,26 @@ void setRuntimeHealth(bool wifiOk, bool wifiInitTimeout, bool hx711Ok, bool mqtt
         g_wifiInitTimeout = wifiInitTimeout;
         g_hx711Ok = hx711Ok;
         g_mqttOk = mqttOk;
+        g_displayDirty = true;
+    }
+}
+
+void setHx711ChannelReady(bool ch1, bool ch2, bool ch3)
+{
+    if (g_hxChOk[0] != ch1 || g_hxChOk[1] != ch2 || g_hxChOk[2] != ch3)
+    {
+        g_hxChOk[0] = ch1;
+        g_hxChOk[1] = ch2;
+        g_hxChOk[2] = ch3;
+        g_displayDirty = true;
+    }
+}
+
+void setAiConfThreshold(float threshold)
+{
+    if (fabsf(g_aiConfThrDisplay - threshold) > 1e-5f)
+    {
+        g_aiConfThrDisplay = threshold;
         g_displayDirty = true;
     }
 }
@@ -247,19 +282,33 @@ static void showAiResultPage()
         oledDisplay.println("Conf:  --");
     }
 
-    // 显示“距离上次识别过了多久”，便于判断当前结果是不是旧数据。
+    char thrStr[12];
+    if (g_aiConfThrDisplay <= 0.0f)
+    {
+        strncpy(thrStr, "OFF", sizeof(thrStr));
+        thrStr[sizeof(thrStr) - 1] = '\0';
+    }
+    else
+    {
+        snprintf(thrStr, sizeof(thrStr), "%.2f", static_cast<double>(g_aiConfThrDisplay));
+    }
+
     oledDisplay.setCursor(0, 45);
     if (g_aiUpdateMs == 0)
     {
-        oledDisplay.println("No data yet");
+        char lineBuf[24];
+        snprintf(lineBuf, sizeof(lineBuf), "No data T:%s", thrStr);
+        oledDisplay.println(lineBuf);
     }
     else
     {
         uint32_t ageSec = (millis() - g_aiUpdateMs) / 1000;
-        char ageBuf[24];
-        snprintf(ageBuf, sizeof(ageBuf), "Updated: %lus ago", (unsigned long)ageSec);
-        oledDisplay.println(ageBuf);
+        char lineBuf[24];
+        snprintf(lineBuf, sizeof(lineBuf), "U:%lu T:%s", (unsigned long)ageSec, thrStr);
+        oledDisplay.println(lineBuf);
     }
+
+    drawPageIndicator();
     oledDisplay.display();
 }
 
@@ -292,16 +341,22 @@ static void showBinWeightPage()
 
     for (uint8_t i = 0; i < 3; ++i)
     {
-        float pct = (weights[i] * 100.0f) / fullWeight;
-        if (pct < 0.0f)
-            pct = 0.0f;
-        if (pct > 100.0f)
-            pct = 100.0f;
-        bool isFull = (weights[i] >= fullWeight);
-
         char lineBuf[25];
-        snprintf(lineBuf, sizeof(lineBuf), "B%u:%4ldg %3u%% %s", i + 1,
-                 (long)weights[i], (unsigned int)(pct + 0.5f), isFull ? "FULL" : "OK");
+        if (!g_hxChOk[i])
+        {
+            snprintf(lineBuf, sizeof(lineBuf), "B%u: ---      ERR", i + 1);
+        }
+        else
+        {
+            float pct = (weights[i] * 100.0f) / fullWeight;
+            if (pct < 0.0f)
+                pct = 0.0f;
+            if (pct > 100.0f)
+                pct = 100.0f;
+            bool isFull = (weights[i] >= fullWeight);
+            snprintf(lineBuf, sizeof(lineBuf), "B%u:%4ldg %3u%% %s", i + 1,
+                     (long)weights[i], (unsigned int)(pct + 0.5f), isFull ? "FULL" : "OK");
+        }
 
         oledDisplay.setCursor(0, linesY[i]);
         oledDisplay.println(lineBuf);
@@ -309,10 +364,19 @@ static void showBinWeightPage()
 
     oledDisplay.setCursor(0, 56);
     // 显示当前满载阈值，方便调试和确认网页端下发的阈值是否已生效
-    char limBuf[18];
-    snprintf(limBuf, sizeof(limBuf), "Lim:%4ldg  <BTN>", (long)fullWeight);
+    char limBuf[22];
+    const bool hxFault = !g_hxChOk[0] || !g_hxChOk[1] || !g_hxChOk[2];
+    if (hxFault)
+    {
+        snprintf(limBuf, sizeof(limBuf), "Lim:%4ldg CHK HX", (long)fullWeight);
+    }
+    else
+    {
+        snprintf(limBuf, sizeof(limBuf), "Limit:%4ldg", (long)fullWeight);
+    }
     oledDisplay.println(limBuf);
 
+    drawPageIndicator();
     oledDisplay.display();
 }
 
@@ -337,10 +401,25 @@ static void showSystemStatusPage()
 
     oledDisplay.setCursor(0, 22);
     oledDisplay.print("HX711: ");
-    oledDisplay.println(g_hx711Ok ? "OK" : "ERROR");
+    if (g_hxChOk[0] && g_hxChOk[1] && g_hxChOk[2])
+    {
+        oledDisplay.println("OK");
+    }
+    else
+    {
+        oledDisplay.print("ERR");
+        for (uint8_t i = 0; i < 3; ++i)
+        {
+            if (!g_hxChOk[i])
+            {
+                oledDisplay.print(static_cast<char>('1' + i));
+            }
+        }
+        oledDisplay.println();
+    }
 
     oledDisplay.setCursor(0, 33);
-    oledDisplay.print("MQTT : ");
+    oledDisplay.print("Cloud: ");
     oledDisplay.println(g_mqttOk ? "OK" : "OFFLINE");
 
     oledDisplay.setCursor(0, 44);
@@ -353,6 +432,7 @@ static void showSystemStatusPage()
     snprintf(limBuf, sizeof(limBuf), "Limit:%5ldg", (long)fullWeight);
     oledDisplay.print(limBuf);
 
+    drawPageIndicator();
     oledDisplay.display();
 }
 

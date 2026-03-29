@@ -45,7 +45,9 @@ void setServoAngle3(int angle);
  *
  * 自检采用“逐路动作”的方式，便于现场直接观察是哪一路不转或串动。
  * 编译选项 -DSERVO_FULL_SELFTEST_AT_BOOT=0 可跳过本自检；initServo() 仍会回零。
+ *
+ * @param beforeChannel 每路自检开始前回调；channel 为 1~3。若关闭完整自检，则调用一次 channel==0（仅回零模式）。
  */
-void runServoSelfTest();
+void runServoSelfTest(void (*beforeChannel)(uint8_t channel) = nullptr);
 
 #endif

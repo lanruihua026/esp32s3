@@ -200,14 +200,30 @@ void setServoAngle3(int angle)
     writeServoAngle(g_servo3, angle);
 }
 
-void runServoSelfTest()
+void runServoSelfTest(void (*beforeChannel)(uint8_t channel))
 {
 #if SERVO_FULL_SELFTEST_AT_BOOT
     constexpr uint16_t kSettle = SERVO_SETTLE_MS;
+    if (beforeChannel)
+    {
+        beforeChannel(1);
+    }
     runSingleServoSelfTest(g_servo1, kSettle);
+    if (beforeChannel)
+    {
+        beforeChannel(2);
+    }
     runSingleServoSelfTest(g_servo2, kSettle);
+    if (beforeChannel)
+    {
+        beforeChannel(3);
+    }
     runSingleServoSelfTest(g_servo3, kSettle);
 #else
+    if (beforeChannel)
+    {
+        beforeChannel(0);
+    }
     Serial.println("[SERVO_SELFTEST] full self-test disabled (SERVO_FULL_SELFTEST_AT_BOOT=0), homing only");
 #endif
 }

@@ -1,4 +1,4 @@
-﻿#ifndef _OLED_INIT_H_
+#ifndef _OLED_INIT_H_
 #define _OLED_INIT_H_
 
 #include <Adafruit_GFX.h>
@@ -125,6 +125,16 @@ void setInitModuleStatus(InitModuleId module, InitModuleStatus status, const cha
  * @brief 设置运行态模块健康状态（用于主页面 ERROR 摘要）
  */
 void setRuntimeHealth(bool wifiOk, bool wifiInitTimeout, bool hx711Ok, bool mqttOk);
+
+/**
+ * @brief 同步三路 HX711 初始化结果（重量页分路 ERR、状态页摘要）
+ */
+void setHx711ChannelReady(bool ch1, bool ch2, bool ch3);
+
+/**
+ * @brief 同步 AI 置信度阈值（识别页 Thr，与 g_aiConfThreshold 一致）
+ */
+void setAiConfThreshold(float threshold);
 
 /**
  * @brief 显示开机进度条页面
