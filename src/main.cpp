@@ -53,11 +53,15 @@ namespace
     constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;     // WiFi 断线后重连尝试间隔（毫秒）
     constexpr uint32_t WIFI_BOOT_WAIT_MS = 5000;           // 启动阶段等待 WiFi 连接的最长时间（毫秒）：连上即退出，最长 5s
 
-    // HX711 校准系数（raw ADC 差值 / 克），使用 216g 砝码标定。
+    // HX711 出厂默认校准系数（raw ADC 差值 / 克），使用 216g 砝码标定。
+    // 仅作启动回退值：若 NVS 中已保存过校准系数（hx1_scale/hx2_scale/hx3_scale），则优先使用 NVS 中的值。
     // 修改方法：new_factor = old_factor × (当前显示值 / 实际重量)
-    constexpr float HX711_CAL_FACTOR_1 = 452.3f; // 1 号仓（GPIO1/2）
-    constexpr float HX711_CAL_FACTOR_2 = 419.8f; // 2 号仓（GPIO11/12）
-    constexpr float HX711_CAL_FACTOR_3 = 455.5f; // 3 号仓（GPIO13/14）
+    // 校准修正：B2 实测 234g → 419.8×(234/216)≈454.5；B3 实测 197g → 455.5×(197/216)≈415.6
+    constexpr float HX711_CAL_FACTOR_1 = 452.3f; // 1 号仓（GPIO1/2）  实测 215-216g，无需调整
+    constexpr float HX711_CAL_FACTOR_2 = 454.5f; // 2 号仓（GPIO11/12）修正前 419.8，实测偏高 ~8.3%
+    constexpr float HX711_CAL_FACTOR_3 = 415.6f; // 3 号仓（GPIO13/14）修正前 455.5，实测偏低 ~8.8%
+    // 开机恢复零点后，若当前载荷低于该阈值，认为仓位接近空载，自动重新去皮修正漂移。
+    constexpr float HX711_BOOT_EMPTY_THRESHOLD_G = 50.0f;
 
     // ===== OneNET 云平台配置 =====
     constexpr const char *ONENET_PRODUCT_ID = "f45hkc7xC7";                                   // 产品 ID
@@ -102,6 +106,10 @@ namespace
     bool g_hx711_3InitOk = false;   // 3 号仓 HX711 是否初始化成功，业务含义是称重模块的 3 号通道是否正常。
     bool g_wifiInitTimeout = false; // 启动阶段 WiFi 是否连接超时，业务含义是系统是否处于“联网异常”状态，影响 OLED 显示和告警逻辑。
     bool g_warningActive = false;   // 告警状态，true 表示当前处于满载告警中，false 表示未告警或已解除告警。
+    // 串口标定流程状态：每路需要先 TARE，再允许 CAL，避免零点与跨度错配。
+    bool g_calReadyCh1 = false;
+    bool g_calReadyCh2 = false;
+    bool g_calReadyCh3 = false;
 
     /**
      * @brief 将重量限制在 0~100% 的范围内
@@ -219,28 +227,139 @@ namespace
     }
 
     /**
+     * @brief 恢复或设置单路 HX711 的校准系数（calibration_factor）
+     *
+     * 策略：
+     * - 若 NVS 中已保存过该路的系数（isKey 返回 true），优先使用 NVS 值，
+     *   使运行时通过串口命令标定后写入的系数重启仍可生效。
+     * - 若 NVS 中没有保存（首次上电），使用编译期默认值并写入 NVS，
+     *   后续只需通过串口命令重新标定，无需再改常量重新烧录。
+     *
+     * @param nvsKey       NVS 中该路系数的键名（如 "hx1_scale"）
+     * @param setScale     写入驱动校准系数的函数
+     * @param defaultScale 编译期默认系数（HX711_CAL_FACTOR_*）
+     * @param chLabel      日志用通道标识
+     */
+    static void restoreOrLoadScaleChannel(
+        const char *nvsKey,
+        void (*setScale)(float),
+        float defaultScale,
+        const char *chLabel)
+    {
+        if (gPrefs.isKey(nvsKey))
+        {
+            float saved = gPrefs.getFloat(nvsKey, defaultScale);
+            setScale(saved);
+            Serial.printf("[HX711] %s: loaded calibration_factor=%.2f from NVS\n", chLabel, saved);
+        }
+        else
+        {
+            setScale(defaultScale);
+            gPrefs.putFloat(nvsKey, defaultScale);
+            Serial.printf("[HX711] %s: using default calibration_factor=%.2f, saved to NVS\n", chLabel, defaultScale);
+        }
+    }
+
+    /**
+     * @brief 对单路 HX711 执行“恢复旧零点 + 条件自动去皮”并回写 NVS
+     *
+     * 策略：
+     * - 若 NVS 中存在旧零点：先恢复，再测当前载荷；低于空载阈值则自动去皮并回写。
+     * - 若 NVS 中不存在零点：视为首次启动，直接去皮并写入 NVS。
+     * - 若采样无效或去皮失败：保留旧零点，不覆盖 NVS。
+     */
+    static void restoreOrTareChannel(
+        const char *nvsKey,
+        void (*setOffset)(float),
+        bool (*doTare)(),
+        float (*getOffset)(),
+        float (*getLoadMag)(),
+        const char *chLabel)
+    {
+        if (gPrefs.isKey(nvsKey))
+        {
+            float savedOffset = gPrefs.getFloat(nvsKey, 0.0f);
+            setOffset(savedOffset);
+            float loadMagnitude = getLoadMag();
+            Serial.printf("[HX711] %s: restored zero_offset=%.1f, load_abs=%.1fg\n",
+                          chLabel, savedOffset, loadMagnitude);
+
+            if (loadMagnitude >= 0.0f && loadMagnitude < HX711_BOOT_EMPTY_THRESHOLD_G)
+            {
+                if (doTare())
+                {
+                    gPrefs.putFloat(nvsKey, getOffset());
+                    Serial.printf("[HX711] %s: near-empty, re-tared and saved zero_offset=%.1f\n",
+                                  chLabel, getOffset());
+                }
+                else
+                {
+                    Serial.printf("[HX711] %s: near-empty but tare failed, keeping restored offset\n", chLabel);
+                }
+            }
+            else if (loadMagnitude < 0.0f)
+            {
+                Serial.printf("[HX711] %s: load probe invalid, keeping restored offset\n", chLabel);
+            }
+            else
+            {
+                Serial.printf("[HX711] %s: bin has load (%.1fg >= %.1fg), keeping restored offset\n",
+                              chLabel, loadMagnitude, HX711_BOOT_EMPTY_THRESHOLD_G);
+            }
+        }
+        else
+        {
+            Serial.printf("[HX711] %s: no saved zero offset, first boot tare\n", chLabel);
+            if (doTare())
+            {
+                gPrefs.putFloat(nvsKey, getOffset());
+                Serial.printf("[HX711] %s: first-boot tare done, saved zero_offset=%.1f\n",
+                              chLabel, getOffset());
+            }
+            else
+            {
+                Serial.printf("[HX711] %s: first-boot tare failed, zero offset unchanged\n", chLabel);
+            }
+        }
+    }
+
+    /**
      * @brief 初始化 HX711 重量传感器模块
      */
     void initHx711Modules()
     {
-        // 依次初始化三路重量传感器，并写入各自校准系数。
+        // 依次初始化三路重量传感器：
+        // 1) 恢复校准系数（优先 NVS）
+        // 2) 恢复零点，必要时条件去皮
         // 三路全部可用才认为称重模块整体正常。
         setInitModuleStatus(INIT_MODULE_HX711, INIT_RUNNING, "Probe");
 
         showBootProgress(20, "HX711_1");
         g_hx711_1InitOk = setupHX711();
         showBootProgress(28, "HX711_1 Cal");
-        setCalibrationFactor(HX711_CAL_FACTOR_1);
+        if (g_hx711_1InitOk)
+        {
+            restoreOrLoadScaleChannel("hx1_scale", setCalibrationFactor, HX711_CAL_FACTOR_1, "CH1");
+            restoreOrTareChannel("hx1_zero", setZeroOffset, tareScale, getZeroOffset, getLoadMagnitude, "CH1");
+        }
 
         showBootProgress(32, "HX711_2");
         g_hx711_2InitOk = setupHX711_2();
         showBootProgress(36, "HX711_2 Cal");
-        setCalibrationFactor2(HX711_CAL_FACTOR_2);
+        if (g_hx711_2InitOk)
+        {
+            restoreOrLoadScaleChannel("hx2_scale", setCalibrationFactor2, HX711_CAL_FACTOR_2, "CH2");
+            restoreOrTareChannel("hx2_zero", setZeroOffset2, tareScale2, getZeroOffset2, getLoadMagnitude2, "CH2");
+        }
 
         showBootProgress(38, "HX711_3");
         g_hx711_3InitOk = setupHX711_3();
         showBootProgress(40, "HX711_3 Cal");
-        setCalibrationFactor3(HX711_CAL_FACTOR_3);
+        if (g_hx711_3InitOk)
+        {
+            restoreOrLoadScaleChannel("hx3_scale", setCalibrationFactor3, HX711_CAL_FACTOR_3, "CH3");
+            restoreOrTareChannel("hx3_zero", setZeroOffset3, tareScale3, getZeroOffset3, getLoadMagnitude3, "CH3");
+        }
 
         setInitModuleStatus(INIT_MODULE_HX711, allHx711Ready() ? INIT_OK : INIT_ERROR, allHx711Ready() ? "Ready" : "Check");
     }
@@ -714,6 +833,167 @@ namespace
         const BoxBinData bin3 = {g_currentWeight3, clampPercent(g_currentWeight3), g_currentWeight3 >= g_fullWeightG};
         oneNetMqttUploadProperties(bin1, bin2, bin3, g_fullWeightG, g_aiConfThreshold);
     }
+
+    // ===== 串口标定命令处理 =====
+    // 通过 USB 串口（115200 波特率）对三路 HX711 执行去皮和校准，
+    // 标定结果立即持久化到 NVS，重启后无需重新烧录仍可保留。
+    //
+    // 支持的命令（发送后按回车，大小写均可）：
+    //   TARE1 / TARE2 / TARE3              空仓去皮，请先确认该仓为空载稳定后发送
+    //   CAL1:<重量g> / CAL2:<重量g> / CAL3:<重量g>
+    //                                       放已知砝码后校准，例如 "CAL2:216"
+    //   STATUS                              打印三路当前系数、零点和实时重量
+    //
+    // 标准校准流程：
+    //   1. 空仓 → 发送 TARE1（去皮并保存零点到 NVS）
+    //   2. 放已知重量砝码（如 216g）→ 发送 CAL1:216（保存新系数到 NVS）
+    //   3. 重启设备 → 发送 STATUS 确认系数已恢复
+
+    char g_serialCmdBuf[64] = {0};
+    uint8_t g_serialCmdPos = 0;
+
+    void handleSerialCommand(const char *cmd)
+    {
+        if (cmd == nullptr || cmd[0] == '\0') return;
+
+        // TARE1 / TARE2 / TARE3
+        if (strcmp(cmd, "TARE1") == 0)
+        {
+            Serial.println("[CAL] TARE1: taring CH1...");
+            g_calReadyCh1 = false;
+            if (tareScale())
+            {
+                gPrefs.putFloat("hx1_zero", getZeroOffset());
+                g_calReadyCh1 = true;
+                Serial.printf("[CAL] TARE1 OK: zero_offset=%.1f saved\n", getZeroOffset());
+            }
+            else { Serial.println("[CAL] TARE1 FAIL: insufficient valid samples"); }
+            return;
+        }
+        if (strcmp(cmd, "TARE2") == 0)
+        {
+            Serial.println("[CAL] TARE2: taring CH2...");
+            g_calReadyCh2 = false;
+            if (tareScale2())
+            {
+                gPrefs.putFloat("hx2_zero", getZeroOffset2());
+                g_calReadyCh2 = true;
+                Serial.printf("[CAL] TARE2 OK: zero_offset=%.1f saved\n", getZeroOffset2());
+            }
+            else { Serial.println("[CAL] TARE2 FAIL: insufficient valid samples"); }
+            return;
+        }
+        if (strcmp(cmd, "TARE3") == 0)
+        {
+            Serial.println("[CAL] TARE3: taring CH3...");
+            g_calReadyCh3 = false;
+            if (tareScale3())
+            {
+                gPrefs.putFloat("hx3_zero", getZeroOffset3());
+                g_calReadyCh3 = true;
+                Serial.printf("[CAL] TARE3 OK: zero_offset=%.1f saved\n", getZeroOffset3());
+            }
+            else { Serial.println("[CAL] TARE3 FAIL: insufficient valid samples"); }
+            return;
+        }
+
+        // CAL1:<g> / CAL2:<g> / CAL3:<g>
+        if (strncmp(cmd, "CAL1:", 5) == 0)
+        {
+            float w = atof(cmd + 5);
+            if (w <= 0.0f) { Serial.println("[CAL] CAL1 FAIL: invalid weight"); return; }
+            if (!g_calReadyCh1) { Serial.println("[CAL] CAL1 FAIL: run TARE1 first in current session"); return; }
+            Serial.printf("[CAL] CAL1: calibrating CH1 with %.1fg...\n", w);
+            if (calibrateScale(w))
+            {
+                gPrefs.putFloat("hx1_scale", getCalibrationFactor());
+                g_calReadyCh1 = false;
+                Serial.printf("[CAL] CAL1 OK: factor=%.2f saved to NVS\n", getCalibrationFactor());
+            }
+            else
+            {
+                Serial.println("[CAL] CAL1 FAIL: calibration rejected (sensor not ready or samples invalid)");
+            }
+            return;
+        }
+        if (strncmp(cmd, "CAL2:", 5) == 0)
+        {
+            float w = atof(cmd + 5);
+            if (w <= 0.0f) { Serial.println("[CAL] CAL2 FAIL: invalid weight"); return; }
+            if (!g_calReadyCh2) { Serial.println("[CAL] CAL2 FAIL: run TARE2 first in current session"); return; }
+            Serial.printf("[CAL] CAL2: calibrating CH2 with %.1fg...\n", w);
+            if (calibrateScale2(w))
+            {
+                gPrefs.putFloat("hx2_scale", getCalibrationFactor2());
+                g_calReadyCh2 = false;
+                Serial.printf("[CAL] CAL2 OK: factor=%.2f saved to NVS\n", getCalibrationFactor2());
+            }
+            else
+            {
+                Serial.println("[CAL] CAL2 FAIL: calibration rejected (sensor not ready or samples invalid)");
+            }
+            return;
+        }
+        if (strncmp(cmd, "CAL3:", 5) == 0)
+        {
+            float w = atof(cmd + 5);
+            if (w <= 0.0f) { Serial.println("[CAL] CAL3 FAIL: invalid weight"); return; }
+            if (!g_calReadyCh3) { Serial.println("[CAL] CAL3 FAIL: run TARE3 first in current session"); return; }
+            Serial.printf("[CAL] CAL3: calibrating CH3 with %.1fg...\n", w);
+            if (calibrateScale3(w))
+            {
+                gPrefs.putFloat("hx3_scale", getCalibrationFactor3());
+                g_calReadyCh3 = false;
+                Serial.printf("[CAL] CAL3 OK: factor=%.2f saved to NVS\n", getCalibrationFactor3());
+            }
+            else
+            {
+                Serial.println("[CAL] CAL3 FAIL: calibration rejected (sensor not ready or samples invalid)");
+            }
+            return;
+        }
+
+        // STATUS
+        if (strcmp(cmd, "STATUS") == 0)
+        {
+            Serial.println("[CAL] === HX711 Status ===");
+            Serial.printf("[CAL] CH1: factor=%.2f  zero=%.1f  weight=%dg\n",
+                          getCalibrationFactor(), getZeroOffset(), g_currentWeight1);
+            Serial.printf("[CAL] CH2: factor=%.2f  zero=%.1f  weight=%dg\n",
+                          getCalibrationFactor2(), getZeroOffset2(), g_currentWeight2);
+            Serial.printf("[CAL] CH3: factor=%.2f  zero=%.1f  weight=%dg\n",
+                          getCalibrationFactor3(), getZeroOffset3(), g_currentWeight3);
+            return;
+        }
+
+        Serial.printf("[CAL] Unknown command: %s\n", cmd);
+        Serial.println("[CAL] Commands: TARE1/2/3  CAL1:<g>/CAL2:<g>/CAL3:<g>  STATUS");
+    }
+
+    void pollSerialCommands()
+    {
+        while (Serial.available())
+        {
+            char c = static_cast<char>(Serial.read());
+            if (c == '\r') continue;
+            if (c == '\n')
+            {
+                g_serialCmdBuf[g_serialCmdPos] = '\0';
+                for (uint8_t i = 0; i < g_serialCmdPos; i++)
+                {
+                    if (g_serialCmdBuf[i] >= 'a' && g_serialCmdBuf[i] <= 'z')
+                        g_serialCmdBuf[i] -= 32; // 转大写，命令大小写不敏感
+                }
+                if (g_serialCmdPos > 0) handleSerialCommand(g_serialCmdBuf);
+                g_serialCmdPos = 0;
+                continue;
+            }
+            if (g_serialCmdPos < sizeof(g_serialCmdBuf) - 1)
+                g_serialCmdBuf[g_serialCmdPos++] = c;
+            else
+                g_serialCmdPos = 0; // 行过长，丢弃重新接收
+        }
+    }
 } // namespace
 
 void setup()
@@ -751,6 +1031,7 @@ void loop()
     const uint32_t now = millis(); // 本次 loop 的时间戳，统一传给需要计时的函数，避免多次调用 millis() 产生不一致
 
     // 主循环按“先采集输入，再更新执行器，最后处理周期任务”组织。
+    pollSerialCommands(); // 处理串口标定命令（TARE/CAL/STATUS），不影响正常运行
     pollCameraUart();
     updateServoByAiResult();
     pollButtons();

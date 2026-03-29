@@ -7,14 +7,13 @@
 #define HX711_SCK3 14
 
 // ===== 称重参数 =====
-// calibration_factor3：每 1 克对应的原始 ADC 差值（raw / g），通过 calibrateScale3() 校准后更新
+// calibration_factor3：每 1 克对应的原始 ADC 差值（raw / g），始终为正
 static float calibration_factor3 = 1000.0f;
 // zero_offset3：去皮后的零点偏移（原始 ADC），由 tareScale3() 采样设置
 static float zero_offset3 = 0.0f;
 
 // 初始化完成标志，false 时 getWeight3() 直接返回 0
 static bool isScaleReady3 = false;
-
 
 // 部分接线或受力方向下，施加重量可能使原始值变小（负方向）。
 // scale_direction3 用于统一把"加重"映射为正重量：+1 表示正向，-1 表示反向。
@@ -26,6 +25,8 @@ static bool direction_locked3 = false;
 static const float ZERO_DEADBAND_G3 = 2.0f;
 // 方向锁定阈值：净原始值绝对值超过该值时才判断并锁定受力方向
 static const float DIRECTION_LOCK_RAW_THRESHOLD3 = 30000.0f;
+// 去皮时要求的最小有效样本数（共采 15 帧）
+static const int TARE_MIN_VALID_SAMPLES3 = 8;
 
 // 前向声明，仅在本文件内部使用
 static int32_t readRawData3();
@@ -54,13 +55,13 @@ static bool waitDataReady3(uint32_t timeout_us)
 }
 
 /**
- * @brief 初始化第三个 HX711 模块
+ * @brief 初始化第三个 HX711 模块（不自动去皮）
  * 说明：
  * 1. 设置引脚模式，确保 SCK 初始为 LOW。
  * 2. 上电后等待 1.2 秒预热，降低初始漂移影响。
  * 3. 丢弃前 8 帧数据，进一步稳定读数。
  * 4. 通过 5 帧均值探测传感器是否正常响应（probeRaw == 0 视为超时失败）。
- * 5. 调用 tareScale3() 进行去皮，准备好称重使用。
+ * 5. 仅设置 isScaleReady3 标志，不执行去皮——零点由调用方从 NVS 恢复或在确认空仓后写入。
  * @return true 初始化成功；false 探测超时，传感器未就绪
  */
 bool setupHX711_3()
@@ -85,7 +86,7 @@ bool setupHX711_3()
     }
 
     isScaleReady3 = true;
-    tareScale3();
+    // 不在此处去皮；零点由主流程从 NVS 恢复并按需条件去皮。
     return true;
 }
 
@@ -228,59 +229,121 @@ float getWeight3()
 }
 
 /**
- * @brief 使用已知砝码重量校准第三个传感器
- * @param knownWeight 已知砝码的实际重量（单位：克，必须 > 0）
- *
- * 说明：
- * 校准前请确保秤盘已去皮（调用过 tareScale3()）。
- * 函数通过多次采样计算新的 calibration_factor3（raw/g），
- * 并将结果打印到串口，方便记录后写入固件常量。
- * 公式：calibration_factor3 = 净原始值 / 实际重量
+ * @brief 获取第三个 HX711 当前载荷绝对值估计（克，不做方向裁剪）
+ * @return >=0: 估计载荷；<0: 采样无效或未就绪
  */
-void calibrateScale3(float knownWeight)
+float getLoadMagnitude3()
 {
     if (!isScaleReady3)
     {
-        return;
+        return -1.0f;
     }
 
-    const int samples = 10;                              // 校准采样帧数（越多越准）
-    float currentValue = readAverageRaw3(samples);
-    float netValue = currentValue - zero_offset3;        // 减去零点得到净原始值
+    int validCount = 0;
+    float rawValue = readAverageRaw3(5, &validCount);
+    if (validCount == 0)
+    {
+        return -1.0f;
+    }
 
-    // calibration_factor3 = 净原始值 / 实际重量（克）
+    float netValue = rawValue - zero_offset3;
+    return fabsf(netValue) / calibration_factor3;
+}
+
+/**
+ * @brief 使用已知砝码重量校准第三个传感器
+ * @param knownWeight 已知砝码的实际重量（单位：克，必须 > 0）
+ * @return true 校准成功并更新因子；false 校准失败（未就绪或有效样本不足）
+ *
+ * 说明：
+ * 校准前请确保秤盘已去皮（调用过 tareScale3()）。
+ * 函数通过多次采样计算新的 calibration_factor3（raw/g）。
+ * 因子始终取正值，受力方向由 scale_direction3 单独维护，两者不再耦合。
+ * 有效样本不足时拒绝更新，防止异常采样污染校准值。
+ */
+bool calibrateScale3(float knownWeight)
+{
+    if (!isScaleReady3)
+    {
+        return false;
+    }
+
+    const int samples = 10;
+    int validCount = 0;
+    float currentValue = readAverageRaw3(samples, &validCount);
+    if (validCount < 5)
+    {
+        return false; // 有效样本不足，拒绝更新校准值
+    }
+    float netValue = currentValue - zero_offset3;
+
+    // 校准因子始终为正，方向由 scale_direction3 单独处理
     if (knownWeight > 0 && netValue != 0.0f)
     {
-        calibration_factor3 = netValue / knownWeight;
+        calibration_factor3 = fabsf(netValue) / knownWeight;
+        return true;
     }
+    return false;
 }
 
 /**
  * @brief 第三个 HX711 去皮：将当前读数设为零点
+ * @return true 去皮成功；false 有效样本不足，零点未更新
  *
  * 说明：
- * 1. 读取当前空载平均值作为 zero_offset3，后续重量计算基于此零点。
- * 2. 重置方向锁定标志，允许重新识别受力方向，适应接线或放置方式调整。
- * 3. 在 setupHX711_3() 完成初始去皮；运行时也可手动调用，适应环境变化。
+ * 1. 有效样本数不足（< TARE_MIN_VALID_SAMPLES3）时拒绝更新，防止异常采样污染零点。
+ * 2. 重置 scale_direction3 和 direction_locked3，确保重新摆放后能正确识别方向。
  */
-void tareScale3()
+bool tareScale3()
 {
     if (!isScaleReady3)
     {
-        return;
+        return false;
     }
 
-    // 采集多帧求均值，帧数越多零点越稳定
     const int samples = 15;
-    zero_offset3 = readAverageRaw3(samples);  // 将当前空载均值记为零点偏移
+    int validCount = 0;
+    float avg = readAverageRaw3(samples, &validCount);
 
-    // 重新去皮后允许再次自动识别方向
+    if (validCount < TARE_MIN_VALID_SAMPLES3)
+    {
+        return false; // 有效样本不足，拒绝更新零点
+    }
+
+    zero_offset3 = avg;
+    // 去皮后同时重置方向，避免旧方向导致轻载被截断为 0
+    scale_direction3 = 1;
+    direction_locked3 = false;
+    return true;
+}
+
+/**
+ * @brief 获取第三个 HX711 当前零点偏移（原始 ADC 值）
+ * @return 当前零点偏移，供调用方持久化到 NVS
+ */
+float getZeroOffset3()
+{
+    return zero_offset3;
+}
+
+/**
+ * @brief 直接写入第三个 HX711 的零点偏移（用于从 NVS 恢复）
+ * @param offset 要恢复的零点值（原始 ADC）
+ *
+ * 说明：此接口仅供启动阶段从 NVS 恢复上一次有效零点使用，
+ * 运行时去皮请调用 tareScale3()，不要直接调用本函数。
+ */
+void setZeroOffset3(float offset)
+{
+    zero_offset3 = offset;
+    // 恢复零点时同时重置方向，允许重新识别受力方向
+    scale_direction3 = 1;
     direction_locked3 = false;
 }
 
 /**
  * @brief 手动设置第三个 HX711 的校准因子
- * @param factor 校准因子（raw / g），不能为 0
+ * @param factor 校准因子（raw / g），不能为 0，始终取正值
  *
  * 适用于已通过其他方式（如 PC 软件）计算出校准因子的场景，
  * 直接写入而无需放砝码走完整的 calibrateScale3() 流程。
@@ -289,6 +352,15 @@ void setCalibrationFactor3(float factor)
 {
     if (factor != 0.0f)
     {
-        calibration_factor3 = factor;
+        calibration_factor3 = fabsf(factor);
     }
+}
+
+/**
+ * @brief 获取第三个 HX711 当前校准因子（raw / g）
+ * @return 当前校准因子，始终为正值
+ */
+float getCalibrationFactor3()
+{
+    return calibration_factor3;
 }

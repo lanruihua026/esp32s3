@@ -1,4 +1,4 @@
-﻿#include "hx711.h"
+#include "hx711.h"
 
 #include <math.h>
 
@@ -7,7 +7,7 @@
 #define HX711_SCK 2
 
 // ===== 称重参数 =====
-// calibration_factor 含义：每 1 克对应的原始 ADC 差值（raw / g）
+// calibration_factor 含义：每 1 克对应的原始 ADC 差值（raw / g），始终为正。
 static float calibration_factor = 1000.0f;
 // zero_offset 含义：去皮后的零点偏移（原始 ADC）
 static float zero_offset = 0.0f;
@@ -15,9 +15,8 @@ static float zero_offset = 0.0f;
 // 初始化完成标志
 static bool isScaleReady = false;
 
-
 // 部分接线或受力方向下，施加重量可能使原始值变小（负方向）。
-// scale_direction 用于统一把“加重”映射为正重量。
+// scale_direction 用于统一把"加重"映射为正重量。
 static int8_t scale_direction = 1;
 // 一旦检测到足够明显的受力变化，就锁定方向，避免来回抖动。
 static bool direction_locked = false;
@@ -26,6 +25,8 @@ static bool direction_locked = false;
 static const float ZERO_DEADBAND_G = 2.0f;
 // 方向锁定阈值：只有净原始值足够大才判断方向
 static const float DIRECTION_LOCK_RAW_THRESHOLD = 30000.0f;
+// 去皮时要求的最小有效样本数（共采 15 帧）
+static const int TARE_MIN_VALID_SAMPLES = 8;
 
 static int32_t readRawData();
 static float readAverageRaw(int samples, int *outValidCount = nullptr);
@@ -48,14 +49,15 @@ static bool waitDataReady(uint32_t timeout_us)
     }
     return true;
 }
+
 /**
- * @brief 初始化 HX711 模块
+ * @brief 初始化 HX711 模块（不自动去皮）
  * 说明：
  * 1. 设置引脚模式，确保 SCK 初始为 LOW。
  * 2. 上电后等待 1.2 秒预热，降低初始漂移影响。
  * 3. 丢弃前 8 帧数据，进一步稳定读数。
- * 4. 调用 tareScale() 进行去皮，准备好称重使用。
- * 5. 设置 isScaleReady 标志，允许后续读取重量。
+ * 4. 通过 5 帧均值探测传感器是否可用。
+ * 5. 仅设置 isScaleReady 标志，不执行去皮——零点由调用方从 NVS 恢复或在确认空仓后写入。
  */
 bool setupHX711()
 {
@@ -70,7 +72,7 @@ bool setupHX711()
         readRawData();
     }
 
-    // 通过一次均值采样判断传感器是否可用，避免后续流程误判为”初始化成功”。
+    // 通过一次均值采样判断传感器是否可用，避免后续流程误判为"初始化成功"。
     float probeRaw = readAverageRaw(5);
     if (probeRaw == 0.0f)
     {
@@ -79,7 +81,7 @@ bool setupHX711()
     }
 
     isScaleReady = true;
-    tareScale();
+    // 不在此处去皮；零点由主流程从 NVS 恢复并按需条件去皮。
     return true;
 }
 
@@ -214,62 +216,137 @@ float getWeight()
 }
 
 /**
+ * @brief 获取当前载荷绝对值估计（克，不做方向裁剪）
+ * @return >=0: 估计载荷；<0: 采样无效或未就绪
+ */
+float getLoadMagnitude()
+{
+    if (!isScaleReady)
+    {
+        return -1.0f;
+    }
+
+    int validCount = 0;
+    float rawValue = readAverageRaw(5, &validCount);
+    if (validCount == 0)
+    {
+        return -1.0f;
+    }
+
+    float netValue = rawValue - zero_offset;
+    return fabsf(netValue) / calibration_factor;
+}
+
+/**
  * @brief 以已知砝码重量校准传感器
  * @param knownWeight 已知砝码的实际重量（单位：克，必须 > 0）
+ * @return true 校准成功并更新因子；false 校准失败（未就绪或有效样本不足）
  *
  * 说明：
  * 校准前请确保秤盘已去皮（调用过 tareScale()）。
- * 函数通过多次采样计算新的 calibration_factor（raw/g），
- * 并将结果打印到串口，方便记录后写入固件常量。
+ * 函数通过多次采样计算新的 calibration_factor（raw/g），因子始终取正值，
+ * 受力方向由 scale_direction 单独维护，两者不再耦合。
  */
-void calibrateScale(float knownWeight)
+bool calibrateScale(float knownWeight)
 {
     if (!isScaleReady)
     {
-        return;
+        return false;
     }
 
     const int samples = 10;
-    float currentValue = readAverageRaw(samples);
+    int validCount = 0;
+    float currentValue = readAverageRaw(samples, &validCount);
+    if (validCount < 5)
+    {
+        return false; // 有效样本不足，拒绝更新校准值
+    }
     float netValue = currentValue - zero_offset;
 
-    // calibration_factor = 原始净值 / 实际重量
+    // 校准因子始终为正，方向由 scale_direction 单独处理
     if (knownWeight > 0 && netValue != 0.0f)
     {
-        calibration_factor = netValue / knownWeight;
+        calibration_factor = fabsf(netValue) / knownWeight;
+        return true;
     }
+    return false;
 }
+
 /**
- * @brief HX711去皮函数，用于将当前传感器读数设为零点
+ * @brief HX711 去皮函数，将当前传感器读数设为零点
+ * @return true 去皮成功；false 有效样本不足，零点未更新
+ *
  * 说明：
  * 1. 读取当前原始值作为 zero_offset，后续重量计算会基于这个零点进行调整。
- * 2. 调用后会重置方向锁定，允许重新识别受力方向，适应放置方式调整。
- * 3. 这个函数在 setupHX711() 中被调用，完成初始去皮；也可以在运行时调用，适应环境变化或重新放置后的去皮需求。
+ * 2. 有效样本数不足（< TARE_MIN_VALID_SAMPLES）时拒绝更新，防止异常采样污染零点。
+ * 3. 重置 scale_direction 和 direction_locked，确保重新摆放后能正确识别方向。
  */
-void tareScale()
+bool tareScale()
 {
     if (!isScaleReady)
     {
-        return;
+        return false;
     }
 
-
-    // 读取当前空载平均值作为零点偏移
     const int samples = 15;
-    zero_offset = readAverageRaw(samples);
+    int validCount = 0;
+    float avg = readAverageRaw(samples, &validCount);
 
-    // 重新去皮后允许再次识别方向
+    if (validCount < TARE_MIN_VALID_SAMPLES)
+    {
+        return false; // 有效样本不足，拒绝更新零点
+    }
+
+    zero_offset = avg;
+    // 去皮后同时重置方向，避免旧方向导致轻载被截断为 0
+    scale_direction = 1;
+    direction_locked = false;
+    return true;
+}
+
+/**
+ * @brief 获取当前零点偏移（原始 ADC 值）
+ * @return 当前零点偏移，供调用方持久化到 NVS
+ */
+float getZeroOffset()
+{
+    return zero_offset;
+}
+
+/**
+ * @brief 直接写入零点偏移（用于从 NVS 恢复）
+ * @param offset 要恢复的零点值（原始 ADC）
+ *
+ * 说明：此接口仅供启动阶段从 NVS 恢复上一次有效零点使用，
+ * 运行时去皮请调用 tareScale()，不要直接调用本函数。
+ */
+void setZeroOffset(float offset)
+{
+    zero_offset = offset;
+    // 恢复零点时同时重置方向，允许重新识别受力方向
+    scale_direction = 1;
     direction_locked = false;
 }
+
 /**
- * @brief 设置校准因子
- * @param factor 每克对应的原始 ADC 差值（raw / g）
- * 说明：这个函数提供了直接设置校准因子的接口，适用于你已经通过其他方式（如 PC 软件）计算出校准因子，或者想要手动调整校准因子以微调称重结果的场景。通常情况下，你只需要在 calibrateScale() 中进行校准，setupHX711() 已经调用了 tareScale() 来完成初始去皮，后续如果需要调整校准因子，可以直接调用 setCalibrationFactor() 来更新。
+ * @brief 手动设置校准因子
+ * @param factor 校准因子（raw / g），不能为 0
+ * 说明：这个函数提供了直接设置校准因子的接口，适用于你已经通过其他方式（如 PC 软件）计算出校准因子，
+ * 或者想要手动调整校准因子以微调称重结果的场景。因子始终取正值。
  */
 void setCalibrationFactor(float factor)
 {
     if (factor != 0.0f)
     {
-        calibration_factor = factor;
+        calibration_factor = fabsf(factor);
     }
+}
+
+/**
+ * @brief 获取当前校准因子（raw / g）
+ * @return 当前校准因子，始终为正值
+ */
+float getCalibrationFactor()
+{
+    return calibration_factor;
 }
