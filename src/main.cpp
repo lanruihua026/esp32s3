@@ -647,13 +647,13 @@ namespace
         //   Battery（电池）          → servo1 (GPIO7)  电池仓
         //   MobilePhone（手机）      → servo2 (GPIO8)  手机仓
         //   Charger / Earphone       → servo3 (GPIO16) 数码配件仓
-        static const uint32_t SERVO_HOLD_MS = 2000;           // 舵机保持 180° 的时长（毫秒）
-        static const uint32_t REARM_SAME_VIEW_MS = 3500;      // 同类持续在画面中时的再允许分拣间隔（略大于 CAM 推理周期）
-        static int activeServo = 0;                           // 当前激活的舵机（0=无，1/2/3）
-        static uint32_t triggerTimeMs = 0;                    // 触发时刻时间戳
-        static bool waitForRearm = false;                     // 归位后等待允许再次分拣
+        static const uint32_t SERVO_HOLD_MS = 2000;      // 舵机保持 180° 的时长（毫秒）
+        static const uint32_t REARM_SAME_VIEW_MS = 3500; // 同类持续在画面中时的再允许分拣间隔（略大于 CAM 推理周期）
+        static int activeServo = 0;                      // 当前激活的舵机（0=无，1/2/3）
+        static uint32_t triggerTimeMs = 0;               // 触发时刻时间戳
+        static bool waitForRearm = false;                // 归位后等待允许再次分拣
         static char labelAtLastSort[sizeof(g_lastAiLabel)] = "";
-        static uint32_t sortCompletedMs = 0;                 // 上次归位完成时刻
+        static uint32_t sortCompletedMs = 0; // 上次归位完成时刻
 
         uint32_t now = millis();
 
@@ -854,7 +854,8 @@ namespace
 
     void handleSerialCommand(const char *cmd)
     {
-        if (cmd == nullptr || cmd[0] == '\0') return;
+        if (cmd == nullptr || cmd[0] == '\0')
+            return;
 
         // TARE1 / TARE2 / TARE3
         if (strcmp(cmd, "TARE1") == 0)
@@ -867,7 +868,10 @@ namespace
                 g_calReadyCh1 = true;
                 Serial.printf("[CAL] TARE1 OK: zero_offset=%.1f saved\n", getZeroOffset());
             }
-            else { Serial.println("[CAL] TARE1 FAIL: insufficient valid samples"); }
+            else
+            {
+                Serial.println("[CAL] TARE1 FAIL: insufficient valid samples");
+            }
             return;
         }
         if (strcmp(cmd, "TARE2") == 0)
@@ -880,7 +884,10 @@ namespace
                 g_calReadyCh2 = true;
                 Serial.printf("[CAL] TARE2 OK: zero_offset=%.1f saved\n", getZeroOffset2());
             }
-            else { Serial.println("[CAL] TARE2 FAIL: insufficient valid samples"); }
+            else
+            {
+                Serial.println("[CAL] TARE2 FAIL: insufficient valid samples");
+            }
             return;
         }
         if (strcmp(cmd, "TARE3") == 0)
@@ -893,7 +900,10 @@ namespace
                 g_calReadyCh3 = true;
                 Serial.printf("[CAL] TARE3 OK: zero_offset=%.1f saved\n", getZeroOffset3());
             }
-            else { Serial.println("[CAL] TARE3 FAIL: insufficient valid samples"); }
+            else
+            {
+                Serial.println("[CAL] TARE3 FAIL: insufficient valid samples");
+            }
             return;
         }
 
@@ -901,8 +911,16 @@ namespace
         if (strncmp(cmd, "CAL1:", 5) == 0)
         {
             float w = atof(cmd + 5);
-            if (w <= 0.0f) { Serial.println("[CAL] CAL1 FAIL: invalid weight"); return; }
-            if (!g_calReadyCh1) { Serial.println("[CAL] CAL1 FAIL: run TARE1 first in current session"); return; }
+            if (w <= 0.0f)
+            {
+                Serial.println("[CAL] CAL1 FAIL: invalid weight");
+                return;
+            }
+            if (!g_calReadyCh1)
+            {
+                Serial.println("[CAL] CAL1 FAIL: run TARE1 first in current session");
+                return;
+            }
             Serial.printf("[CAL] CAL1: calibrating CH1 with %.1fg...\n", w);
             if (calibrateScale(w))
             {
@@ -919,8 +937,16 @@ namespace
         if (strncmp(cmd, "CAL2:", 5) == 0)
         {
             float w = atof(cmd + 5);
-            if (w <= 0.0f) { Serial.println("[CAL] CAL2 FAIL: invalid weight"); return; }
-            if (!g_calReadyCh2) { Serial.println("[CAL] CAL2 FAIL: run TARE2 first in current session"); return; }
+            if (w <= 0.0f)
+            {
+                Serial.println("[CAL] CAL2 FAIL: invalid weight");
+                return;
+            }
+            if (!g_calReadyCh2)
+            {
+                Serial.println("[CAL] CAL2 FAIL: run TARE2 first in current session");
+                return;
+            }
             Serial.printf("[CAL] CAL2: calibrating CH2 with %.1fg...\n", w);
             if (calibrateScale2(w))
             {
@@ -937,8 +963,16 @@ namespace
         if (strncmp(cmd, "CAL3:", 5) == 0)
         {
             float w = atof(cmd + 5);
-            if (w <= 0.0f) { Serial.println("[CAL] CAL3 FAIL: invalid weight"); return; }
-            if (!g_calReadyCh3) { Serial.println("[CAL] CAL3 FAIL: run TARE3 first in current session"); return; }
+            if (w <= 0.0f)
+            {
+                Serial.println("[CAL] CAL3 FAIL: invalid weight");
+                return;
+            }
+            if (!g_calReadyCh3)
+            {
+                Serial.println("[CAL] CAL3 FAIL: run TARE3 first in current session");
+                return;
+            }
             Serial.printf("[CAL] CAL3: calibrating CH3 with %.1fg...\n", w);
             if (calibrateScale3(w))
             {
@@ -975,7 +1009,8 @@ namespace
         while (Serial.available())
         {
             char c = static_cast<char>(Serial.read());
-            if (c == '\r') continue;
+            if (c == '\r')
+                continue;
             if (c == '\n')
             {
                 g_serialCmdBuf[g_serialCmdPos] = '\0';
@@ -984,7 +1019,8 @@ namespace
                     if (g_serialCmdBuf[i] >= 'a' && g_serialCmdBuf[i] <= 'z')
                         g_serialCmdBuf[i] -= 32; // 转大写，命令大小写不敏感
                 }
-                if (g_serialCmdPos > 0) handleSerialCommand(g_serialCmdBuf);
+                if (g_serialCmdPos > 0)
+                    handleSerialCommand(g_serialCmdBuf);
                 g_serialCmdPos = 0;
                 continue;
             }
