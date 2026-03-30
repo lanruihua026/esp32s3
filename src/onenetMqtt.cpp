@@ -13,13 +13,14 @@ namespace
     PubSubClient gMqttClient(gWifiClient);
 
     // 启动时写入的 OneNET 配置。
+    // 实际值由 main.cpp 的 oneNetMqttBegin() 覆盖，此处仅为结构体默认占位。
     OneNetMqttConfig gConfig = {
         "mqtts.heclouds.com",
         1883,
         "",
         "",
         "",
-        1893456000,
+        0, // tokenExpireAt 占位，由 oneNetMqttBegin() 传入 main.cpp 的 ONENET_TOKEN_EXPIRE_AT
         OneNetSignMethod::SHA256};
 
     // 是否已经完成参数配置。

@@ -12,6 +12,14 @@
  * 初始化顺序：指示器 → 摄像头串口 → OLED → 尽早 WiFi.begin → HX711 → WiFi 等待 → 舵机 → 按键 → MQTT
  */
 
+// ==================== OneNET 云平台配置 ====================
+// 换设备或换账号时只改这里，然后重新烧录。
+#define ONENET_PRODUCT_ID    "f45hkc7xC7"
+#define ONENET_DEVICE_NAME   "Box1"
+#define ONENET_BASE64_KEY    "T0R5ejYyM1JrT2VuczBkZllINmZuazRicEMxc29xcnk="
+// Token 过期时间戳（Unix 秒），当前值对应 2030-01-01，到期前需更新并重新烧录
+#define ONENET_TOKEN_EXPIRE_AT  1893456000UL
+
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
@@ -65,10 +73,7 @@ namespace
     // 开机恢复零点后，若当前载荷低于该阈值，认为仓位接近空载，自动重新去皮修正漂移。
     constexpr float HX711_BOOT_EMPTY_THRESHOLD_G = 50.0f;
 
-    // ===== OneNET 云平台配置 =====
-    constexpr const char *ONENET_PRODUCT_ID = "f45hkc7xC7";                                   // 产品 ID
-    constexpr const char *ONENET_DEVICE_NAME = "Box1";                                        // 设备名称
-    constexpr const char *ONENET_BASE64_KEY = "T0R5ejYyM1JrT2VuczBkZllINmZuazRicEMxc29xcnk="; // Base64 编码的设备密钥
+    // OneNET 配置宏定义在文件顶部（#define），此处直接使用。
 
     // NVS 持久化存储，用于保存满载阈值与 AI 置信度阈值，跨重启保持用户设置。
     Preferences gPrefs;
@@ -459,8 +464,7 @@ namespace
                              }
                              char line[17];
                              snprintf(line, sizeof(line), "Servo %u", static_cast<unsigned>(channel));
-                             showBootProgress(72, line);
-                         });
+                             showBootProgress(72, line); });
         setInitModuleStatus(INIT_MODULE_SERVO, INIT_OK, "Ready");
     }
 
@@ -574,7 +578,7 @@ namespace
             ONENET_PRODUCT_ID,         // 产品 ID
             ONENET_DEVICE_NAME,        // 设备名称
             ONENET_BASE64_KEY,         // Base64 编码的设备鉴权密钥
-            1893456000,                // Token 过期时间戳（Unix 时间，需定期更新）
+            ONENET_TOKEN_EXPIRE_AT,    // Token 过期时间戳（统一在上方常量区维护）
             OneNetSignMethod::SHA256}; // 签名算法：HMAC-SHA256
 
         oneNetMqttBegin(cfg);
@@ -701,17 +705,21 @@ namespace
         // 三路舵机各负责一个仓位，识别到对应类别时触发一次：转 180° 保持 2 秒后归位。
         // 同一时刻仅一路为 180°，其余强制 0°，避免多路同时受力或误动。
         // 再触发条件：收到 NONE、识别类别变化、或超时（CAM 持续 DET 时不会发 NONE，仅靠 NONE 会永久锁死）。
+        // 连续帧确认：需连续收到 SERVO_CONFIRM_FRAMES 帧相同标签才真正触发舵机，防止单帧误判。
         // 仓位分配：
         //   Battery（电池）          → servo1 (GPIO7)  电池仓
         //   MobilePhone（手机）      → servo2 (GPIO8)  手机仓
         //   Charger / Earphone       → servo3 (GPIO16) 数码配件仓
         static const uint32_t SERVO_HOLD_MS = 2000;      // 舵机保持 180° 的时长（毫秒）
         static const uint32_t REARM_SAME_VIEW_MS = 3500; // 同类持续在画面中时的再允许分拣间隔（略大于 CAM 推理周期）
+        static const int SERVO_CONFIRM_FRAMES = 2;       // 触发所需连续正检帧数（≥2 可抑制单帧误检）
         static int activeServo = 0;                      // 当前激活的舵机（0=无，1/2/3）
         static uint32_t triggerTimeMs = 0;               // 触发时刻时间戳
         static bool waitForRearm = false;                // 归位后等待允许再次分拣
         static char labelAtLastSort[sizeof(g_lastAiLabel)] = "";
         static uint32_t sortCompletedMs = 0; // 上次归位完成时刻
+        static int confirmCount = 0;                              // 当前连续帧计数
+        static char confirmLabel[sizeof(g_lastAiLabel)] = "";    // 待确认的标签
 
         uint32_t now = millis();
 
@@ -770,12 +778,34 @@ namespace
             }
         }
 
-        // 3. 空闲 → 检查是否有新目标
-        if (!g_lastAiDetected)
+        // 3. 空闲 → 连续帧确认后才触发舵机，防止单帧误判
+        if (!g_lastAiDetected || (g_aiConfThreshold > 0.0f && g_lastAiConf < g_aiConfThreshold))
+        {
+            // 未检测到或置信度不足：清零确认计数
+            confirmCount = 0;
+            confirmLabel[0] = '\0';
             return;
+        }
 
-        if (g_aiConfThreshold > 0.0f && g_lastAiConf < g_aiConfThreshold)
+        // 与上一帧标签相同才累计计数，标签切换则重置
+        if (!labelEqualsCi(g_lastAiLabel, confirmLabel))
+        {
+            confirmCount = 1;
+            strncpy(confirmLabel, g_lastAiLabel, sizeof(confirmLabel) - 1);
+            confirmLabel[sizeof(confirmLabel) - 1] = '\0';
+            Serial.printf("[SERVO] CONFIRM reset label=%s (need %d frames)\n", confirmLabel, SERVO_CONFIRM_FRAMES);
             return;
+        }
+        confirmCount++;
+        if (confirmCount < SERVO_CONFIRM_FRAMES)
+        {
+            Serial.printf("[SERVO] CONFIRM accumulate label=%s count=%d/%d\n",
+                          confirmLabel, confirmCount, SERVO_CONFIRM_FRAMES);
+            return;
+        }
+        // 达到确认帧数 → 触发分拣，重置计数器
+        confirmCount = 0;
+        confirmLabel[0] = '\0';
 
         const bool isBattery = labelEqualsCi(g_lastAiLabel, "Battery");
         const bool isMobile = labelEqualsCi(g_lastAiLabel, "MobilePhone");
