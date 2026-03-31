@@ -54,22 +54,24 @@ bool oneNetMqttConnected();
  * @brief 单个仓格的物模型数据
  *
  * 字段说明：
- * - weight:  当前重量（g），对应物模型 *_weight，范围 0~1000（实际满载阈值）
- * - percent: 满溢百分比（%），对应物模型 *_percent，范围 0.00~100.00
- * - full:    是否满溢，对应物模型 *_full
+ * - weight:   当前重量（g），对应物模型 *_weight，范围 0~5000
+ * - percent:  满溢百分比（%），对应物模型 *_percent，范围 0.00~100.00
+ * - nearFull: 是否即将满载（重量 >= 满载阈值的 90%），对应物模型 *_near_full
+ * - full:     是否满溢（重量 >= 满载阈值），对应物模型 *_full
  */
 struct BoxBinData
 {
     int32_t weight; // 当前重量 (g)
     float percent;  // 满溢百分比 (%)
+    bool nearFull;  // 是否即将满载（>= 90% 阈值）
     bool full;      // 是否满溢
 };
 
 /**
- * @brief 以 OneJSON 属性上报格式发布三仓数据 + 满载阈值 + AI 置信度阈值（共 11 个属性）
- * @param phone             手机仓数据
- * @param mouse             鼠标仓数据
- * @param battery           电池仓数据
+ * @brief 以 OneJSON 属性上报格式发布三仓数据 + 满载阈值 + AI 置信度阈值（共 14 个属性）
+ * @param phone             手机仓数据（含 nearFull / full 两个布尔状态）
+ * @param mouse             鼠标仓数据（含 nearFull / full 两个布尔状态）
+ * @param battery           电池仓数据（含 nearFull / full 两个布尔状态）
  * @param overflowThresholdG 当前满载阈值（克），同步上报使云平台显示实际值而非 undefined
  * @param aiConfThreshold   当前 AI 识别置信度阈值（0~1），同步上报供云端与网页展示
  */
@@ -92,5 +94,13 @@ bool oneNetMqttUploadProperties(
  *   });
  */
 void oneNetSetPropertySetCallback(void (*cb)(const char *payload, unsigned int len));
+
+/**
+ * @brief 主动断开 MQTT 连接
+ *
+ * 在 WiFi 掉线时由主循环调用，防止 TCP 半开状态导致后续属性上报静默失败。
+ * 断开后 oneNetMqttLoop() 会在 WiFi 恢复时自动重连，无需额外处理。
+ */
+void oneNetMqttDisconnect();
 
 #endif

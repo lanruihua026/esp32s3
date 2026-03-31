@@ -4,9 +4,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
-// 当前项目直接写死 WiFi 参数，便于实验室联调。
-#define WIFI_SSID "huage"
-#define WIFI_PASSWORD "11111111"
+// WiFi 凭据从 secrets.h 读取，该文件不进入版本库。
+// 首次部署请复制 secrets.h.example → secrets.h 并填入真实值。
+#include "secrets.h"
 
 // 尽早发起 STA 连接并记录起点时间，供后续按总预算等待（可与 HX711 等初始化重叠）。
 // 多次调用安全：仅第一次生效。

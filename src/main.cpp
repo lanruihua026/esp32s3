@@ -12,13 +12,10 @@
  * 初始化顺序：指示器 → 摄像头串口 → OLED → 尽早 WiFi.begin → HX711 → WiFi 等待 → 舵机 → 按键 → MQTT
  */
 
-// ==================== OneNET 云平台配置 ====================
-// 换设备或换账号时只改这里，然后重新烧录。
-#define ONENET_PRODUCT_ID    "f45hkc7xC7"
-#define ONENET_DEVICE_NAME   "Box1"
-#define ONENET_BASE64_KEY    "T0R5ejYyM1JrT2VuczBkZllINmZuazRicEMxc29xcnk="
-// Token 过期时间戳（Unix 秒），当前值对应 2030-01-01，到期前需更新并重新烧录
-#define ONENET_TOKEN_EXPIRE_AT  1893456000UL
+// OneNET 云平台凭据从 secrets.h 读取，该文件不进入版本库。
+// 换设备或换账号时只改 include/secrets.h，然后重新烧录。
+// （secrets.h 中定义 ONENET_PRODUCT_ID / ONENET_DEVICE_NAME /
+//   ONENET_BASE64_KEY / ONENET_TOKEN_EXPIRE_AT）
 
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
@@ -29,6 +26,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "secrets.h"
 #include "buttonControl.h"
 #include "buzzer.h"
 #include "connectToWiFi.h"
@@ -186,13 +184,28 @@ namespace
 
     /**
      * @brief 同步运行时系统状态
+     *
+     * 额外职责：检测 WiFi 连接从"已连"变为"断开"的边沿，
+     * 在此时主动断开 MQTT，避免 TCP 处于半开状态时 PubSubClient 误报"已连接"，
+     * 导致属性上报静默失败。WiFi 恢复后 oneNetMqttLoop() 会自动重连 MQTT。
      */
     void syncRuntimeHealth()
     {
-        const bool wifiConnected = (WiFi.status() == WL_CONNECTED); // 当前WiFi连接状态，用于检测联网是否异常
+        static bool s_prevWifiConnected = false;
+
+        const bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+
+        // WiFi 刚从连接态变为断开：主动断开 MQTT，清除 TCP 半开状态
+        if (s_prevWifiConnected && !wifiConnected)
+        {
+            oneNetMqttDisconnect();
+        }
+        s_prevWifiConnected = wifiConnected;
+
         if (wifiConnected)
         {
-            g_wifiInitTimeout = false; // 只要当前 WiFi 连接正常，就认为没有联网异常，即使启动阶段曾经超时过也没关系了，OLED 显示和告警逻辑都以当前连接状态为准。
+            // 只要当前 WiFi 连接正常，就清除启动超时标记，OLED 状态页以当前状态为准
+            g_wifiInitTimeout = false;
         }
 
         setRuntimeHealth(wifiConnected, g_wifiInitTimeout, allHx711Ready(), oneNetMqttConnected());
@@ -879,7 +892,12 @@ namespace
 
     void tryReconnectWiFi(uint32_t now)
     {
-        // 启动后如果 WiFi 断开，按固定周期重试，避免频繁重连。
+        // 两层重连策略（分层容错设计）：
+        //   第一层：connectToWiFi.cpp 中的 WiFi.setAutoReconnect(true)
+        //           ——由底层 WiFi 栈处理短暂掉线，通常数秒内自动恢复，无需主动介入。
+        //   第二层（本函数）：每 WIFI_RETRY_INTERVAL_MS(15s) 触发一次 disconnect+begin
+        //           ——兜底处理自动重连已放弃的场景（如信道拥塞、DHCP 超时等），
+        //             确保设备在长时间断网后能主动发起新一轮连接。
         if (WiFi.status() == WL_CONNECTED || (now - g_lastWiFiRetryMs) < WIFI_RETRY_INTERVAL_MS)
         {
             return;
@@ -889,6 +907,7 @@ namespace
         // 第一个 false：不关闭底层 WiFi 驱动；第二个 false：不清除已保存的 SSID/密码
         WiFi.disconnect(false, false);
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        Serial.println("[WiFi] manual retry (layer-2 reconnect)");
     }
 
     void uploadPropertiesIfNeeded(uint32_t now)
@@ -902,10 +921,29 @@ namespace
 
         g_lastReportMs = now;
 
-        // 构造三个仓位的上报数据包：{当前重量(g), 占满百分比(0~100%), 是否满载}
-        const BoxBinData bin1 = {g_currentWeight1, clampPercent(g_currentWeight1), g_currentWeight1 >= g_fullWeightG};
-        const BoxBinData bin2 = {g_currentWeight2, clampPercent(g_currentWeight2), g_currentWeight2 >= g_fullWeightG};
-        const BoxBinData bin3 = {g_currentWeight3, clampPercent(g_currentWeight3), g_currentWeight3 >= g_fullWeightG};
+        // 即将满载阈值：重量达到满载阈值的 90% 且尚未真正满载时触发。
+        // 使用整数乘除避免浮点精度问题：weight * 10 >= threshold * 9。
+        const int32_t nearFullThreshold = g_fullWeightG * 9 / 10;
+
+        // 构造三个仓位的上报数据包：{当前重量(g), 占满百分比(0~100%), 是否即将满载, 是否满载}
+        const BoxBinData bin1 = {
+            g_currentWeight1,
+            clampPercent(g_currentWeight1),
+            (g_currentWeight1 >= nearFullThreshold) && (g_currentWeight1 < g_fullWeightG),
+            g_currentWeight1 >= g_fullWeightG
+        };
+        const BoxBinData bin2 = {
+            g_currentWeight2,
+            clampPercent(g_currentWeight2),
+            (g_currentWeight2 >= nearFullThreshold) && (g_currentWeight2 < g_fullWeightG),
+            g_currentWeight2 >= g_fullWeightG
+        };
+        const BoxBinData bin3 = {
+            g_currentWeight3,
+            clampPercent(g_currentWeight3),
+            (g_currentWeight3 >= nearFullThreshold) && (g_currentWeight3 < g_fullWeightG),
+            g_currentWeight3 >= g_fullWeightG
+        };
 
         oneNetMqttUploadProperties(bin1, bin2, bin3, g_fullWeightG, g_aiConfThreshold);
     }
@@ -916,9 +954,25 @@ namespace
         {
             return;
         }
-        const BoxBinData bin1 = {g_currentWeight1, clampPercent(g_currentWeight1), g_currentWeight1 >= g_fullWeightG};
-        const BoxBinData bin2 = {g_currentWeight2, clampPercent(g_currentWeight2), g_currentWeight2 >= g_fullWeightG};
-        const BoxBinData bin3 = {g_currentWeight3, clampPercent(g_currentWeight3), g_currentWeight3 >= g_fullWeightG};
+        const int32_t nearFullThreshold = g_fullWeightG * 9 / 10;
+        const BoxBinData bin1 = {
+            g_currentWeight1,
+            clampPercent(g_currentWeight1),
+            (g_currentWeight1 >= nearFullThreshold) && (g_currentWeight1 < g_fullWeightG),
+            g_currentWeight1 >= g_fullWeightG
+        };
+        const BoxBinData bin2 = {
+            g_currentWeight2,
+            clampPercent(g_currentWeight2),
+            (g_currentWeight2 >= nearFullThreshold) && (g_currentWeight2 < g_fullWeightG),
+            g_currentWeight2 >= g_fullWeightG
+        };
+        const BoxBinData bin3 = {
+            g_currentWeight3,
+            clampPercent(g_currentWeight3),
+            (g_currentWeight3 >= nearFullThreshold) && (g_currentWeight3 < g_fullWeightG),
+            g_currentWeight3 >= g_fullWeightG
+        };
         oneNetMqttUploadProperties(bin1, bin2, bin3, g_fullWeightG, g_aiConfThreshold);
     }
 

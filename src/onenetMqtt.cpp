@@ -1,4 +1,5 @@
 #include "onenetMqtt.h"
+#include <ArduinoJson.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
 
@@ -81,30 +82,22 @@ namespace
         // === OneNET 协议：必须回复 set_reply ===
         // 从 payload 中提取消息 id，用于回复中与请求配对。
         // payload 格式：{"id":"xxx","version":"1.0","params":{...}}
+        // 注意：mqttCallback 由 PubSubClient::loop() 在主循环中调用，并非中断上下文；
+        //       此处用 ArduinoJson 解析 id 字段，保证与平台 payload 格式无关。
         char msgId[32] = "0";
-        char buf[256] = {0};
-        unsigned int copyLen = (length < sizeof(buf) - 1) ? length : (sizeof(buf) - 1);
-        memcpy(buf, payload, copyLen);
-
-        // 简单字符串搜索提取 "id" 字段值（避免在中断上下文引入重量级 JSON 解析）
-        const char *idKey = strstr(buf, "\"id\"");
-        if (idKey != nullptr)
         {
-            const char *colon = strchr(idKey + 4, ':');
-            if (colon != nullptr)
+            // 仅解析顶层 id 字段，使用小容量文档避免不必要的内存占用。
+            JsonDocument idDoc;
+            DeserializationError err = deserializeJson(idDoc, payload, length);
+            if (err == DeserializationError::Ok)
             {
-                const char *p = colon + 1;
-                while (*p == ' ' || *p == '\t') p++; // 跳过空白
-                bool quoted = (*p == '"');
-                if (quoted) p++;
-                size_t k = 0;
-                while (*p && k < sizeof(msgId) - 1)
-                {
-                    if (quoted  && *p == '"')  break;
-                    if (!quoted && (*p == ',' || *p == '}' || *p == ' ')) break;
-                    msgId[k++] = *p++;
-                }
-                msgId[k] = '\0';
+                const char *parsedId = idDoc["id"] | "0";
+                strncpy(msgId, parsedId, sizeof(msgId) - 1);
+                msgId[sizeof(msgId) - 1] = '\0';
+            }
+            else
+            {
+                Serial.printf("[OneNET] SET_REPLY id parse err: %s\n", err.c_str());
             }
         }
 
@@ -264,26 +257,29 @@ bool oneNetMqttUploadProperties(
     char aiConfStr[16];
     dtostrf(aiConfThreshold, 1, 4, aiConfStr);
 
-    // OneJSON 属性上报载荷：三仓属性 + 满载阈值 + AI 置信度阈值。
-    char payload[720];
+    // OneJSON 属性上报载荷：三仓属性（重量/百分比/即将满载/满溢）+ 满载阈值 + AI 置信度阈值，共 14 个属性。
+    char payload[840];
     snprintf(payload, sizeof(payload),
              "{\"id\":\"%s\",\"version\":\"1.0\",\"params\":{"
              "\"phone_weight\":{\"value\":%d},"
              "\"phone_percent\":{\"value\":%s},"
+             "\"phone_near_full\":{\"value\":%s},"
              "\"phone_full\":{\"value\":%s},"
              "\"mouse_weight\":{\"value\":%d},"
              "\"mouse_percent\":{\"value\":%s},"
+             "\"mouse_near_full\":{\"value\":%s},"
              "\"mouse_full\":{\"value\":%s},"
              "\"battery_weight\":{\"value\":%d},"
              "\"battery_percent\":{\"value\":%s},"
+             "\"battery_near_full\":{\"value\":%s},"
              "\"battery_full\":{\"value\":%s},"
              "\"overflow_threshold_g\":{\"value\":%d},"
              "\"ai_conf_threshold\":{\"value\":%s}"
              "}}",
              msgId.c_str(),
-             phone.weight, phonePct, phone.full ? "true" : "false",
-             mouse.weight, mousePct, mouse.full ? "true" : "false",
-             battery.weight, batteryPct, battery.full ? "true" : "false",
+             phone.weight, phonePct, phone.nearFull ? "true" : "false", phone.full ? "true" : "false",
+             mouse.weight, mousePct, mouse.nearFull ? "true" : "false", mouse.full ? "true" : "false",
+             battery.weight, batteryPct, battery.nearFull ? "true" : "false", battery.full ? "true" : "false",
              overflowThresholdG,
              aiConfStr);
 
@@ -299,4 +295,19 @@ bool oneNetMqttUploadProperties(
 void oneNetSetPropertySetCallback(void (*cb)(const char *payload, unsigned int len))
 {
     gPropertySetCb = cb;
+}
+
+/**
+ * @brief 主动断开 MQTT 连接
+ *
+ * 在 WiFi 掉线时由主循环调用，防止 TCP 半开状态导致后续上报静默失败。
+ * 断开后 oneNetMqttLoop() 会在 WiFi 恢复时自动重连。
+ */
+void oneNetMqttDisconnect()
+{
+    if (gMqttClient.connected())
+    {
+        gMqttClient.disconnect();
+        Serial.println("[OneNET] MQTT disconnect (WiFi lost)");
+    }
 }
