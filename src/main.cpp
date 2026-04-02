@@ -60,6 +60,12 @@ namespace
     constexpr uint32_t PROPERTY_REPORT_INTERVAL_MS = 3000; // OneNET 属性上报周期（毫秒）：3s 上报，配合网页 2s 轮询显著提升数据时效性
     constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;     // WiFi 断线后重连尝试间隔（毫秒）
     constexpr uint32_t WIFI_BOOT_WAIT_MS = 5000;           // 启动阶段等待 WiFi 连接的最长时间（毫秒）：连上即退出，最长 5s
+    // CAM 正常推理/上报存在一定间隔，因此超时阈值需要明显大于单次推理周期；
+    // 若长时间没有任何 DET/NONE/ERR，说明识别链路已卡住或后端不可用。
+    constexpr uint32_t AI_RESULT_STALE_MS = 8000;
+    // OLED 识别页内部会在 5 秒后自动清除 ERR，这里用较低频率续期，
+    // 让“后端仍断开”的状态持续显示为 ERR，但又避免每次 loop 都重置时间戳。
+    constexpr uint32_t AI_STALE_ERROR_REFRESH_MS = 4000;
 
     // HX711 出厂默认校准系数（raw ADC 差值 / 克），使用 216g 砝码标定。
     // 仅作启动回退值：若 NVS 中已保存过校准系数（hx1_scale/hx2_scale/hx3_scale），则优先使用 NVS 中的值。
@@ -93,6 +99,8 @@ namespace
     char g_lastAiLabel[32] = "none";
     float g_lastAiConf = 0.0f;
     uint32_t g_lastAiUpdateMs = 0;
+    bool g_aiStreamStale = false;
+    uint32_t g_lastAiStaleErrorMs = 0;
 
     // 三个仓位的最新重量缓存：
     // 供告警、OLED 页面、OneNET 上报复用。
@@ -631,6 +639,39 @@ namespace
         setAiResult(detected, g_lastAiLabel, g_lastAiConf, g_lastAiUpdateMs); // 同步更新 OLED 显示内容和 OneNET 上报缓存
     }
 
+    void clearAiStreamStale()
+    {
+        g_aiStreamStale = false;
+        g_lastAiStaleErrorMs = 0;
+    }
+
+    void expireAiStateIfStale(uint32_t now)
+    {
+        if (g_lastAiUpdateMs == 0 || (now - g_lastAiUpdateMs) < AI_RESULT_STALE_MS)
+        {
+            return;
+        }
+
+        if (!g_aiStreamStale)
+        {
+            g_aiStreamStale = true;
+
+            // 串口长时间无新数据时，必须清掉旧识别结果，
+            // 否则 OLED 和舵机会一直沿用上一次的 DET 缓存。
+            g_lastAiDetected = false;
+            g_lastAiConf = 0.0f;
+            strncpy(g_lastAiLabel, "none", sizeof(g_lastAiLabel) - 1);
+            g_lastAiLabel[sizeof(g_lastAiLabel) - 1] = '\0';
+            setAiResult(false, g_lastAiLabel, g_lastAiConf, g_lastAiUpdateMs);
+        }
+
+        if (g_lastAiStaleErrorMs == 0 || (now - g_lastAiStaleErrorMs) >= AI_STALE_ERROR_REFRESH_MS)
+        {
+            setAiError(true, now, AI_ERR_TIMEOUT);
+            g_lastAiStaleErrorMs = now;
+        }
+    }
+
     void parseCameraLine(const char *line)
     {
         // ESP32-CAM 当前串口协议：
@@ -662,22 +703,39 @@ namespace
             trimLabelInPlace(label);
 
             float conf = static_cast<float>(atof(p2 + 1));
+            clearAiStreamStale();
             setAiState(true, label, conf);
+            setAiError(false, millis());
             Serial.printf("[CAM] DET label=%s conf=%.1f%%\n", label, conf * 100.0f);
             return;
         }
 
         if (strcmp(line, "NONE") == 0)
         {
+            clearAiStreamStale();
             setAiState(false, "none", 0.0f);
+            setAiError(false, millis());
             Serial.println("[CAM] NONE");
             return;
         }
 
         if (strncmp(line, "ERR,", 4) == 0)
         {
-            setAiState(false, "ERR", 0.0f);
-            Serial.printf("[CAM] ERR %s\n", line + 4);
+            // 解析 <msg> 部分并映射到具体错误分类，便于 OLED 显示定位
+            const char *errMsg = line + 4;
+            AiErrorKind kind = AI_ERR_UNKNOWN;
+            if (strcmp(errMsg, "http_connect_failed") == 0)  kind = AI_ERR_CONN_FAIL;
+            else if (strcmp(errMsg, "http_status") == 0)     kind = AI_ERR_HTTP_STATUS;
+            else if (strcmp(errMsg, "json_parse_failed") == 0) kind = AI_ERR_JSON_FAIL;
+            else if (strcmp(errMsg, "camera_busy") == 0)     kind = AI_ERR_CAM_BUSY;
+            else if (strcmp(errMsg, "capture_failed") == 0)  kind = AI_ERR_CAP_FAIL;
+            else if (strcmp(errMsg, "wifi_disconnected") == 0) kind = AI_ERR_WIFI_OFF;
+            else if (strcmp(errMsg, "camera_init_failed") == 0) kind = AI_ERR_CAM_INIT;
+
+            clearAiStreamStale();
+            setAiState(false, "none", 0.0f);
+            setAiError(true, millis(), kind);
+            Serial.printf("[CAM] ERR %s\n", errMsg);
         }
     }
 
@@ -1249,6 +1307,7 @@ void loop()
     // 主循环按“先采集输入，再更新执行器，最后处理周期任务”组织。
     pollSerialCommands(); // 处理串口标定命令（TARE/CAL/STATUS），不影响正常运行
     pollCameraUart();
+    expireAiStateIfStale(now);
     updateServoByAiResult();
     pollButtons();
 

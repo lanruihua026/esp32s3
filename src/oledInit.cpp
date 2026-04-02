@@ -29,6 +29,9 @@ static bool g_aiDetected = false;
 static char g_aiLabel[32] = "none";
 static float g_aiConf = 0.0f;
 static uint32_t g_aiUpdateMs = 0;
+static bool g_aiError = false;
+static uint32_t g_aiErrorUpdateMs = 0;
+static AiErrorKind g_aiErrorKind = AI_ERR_NONE;
 
 // ===== 启动阶段状态缓存 =====
 static InitModuleStatus g_initStatus[INIT_MODULE_COUNT] = {INIT_PENDING};
@@ -165,6 +168,41 @@ void setAiResult(bool detected, const char *label, float conf, uint32_t updateMs
     g_displayDirty = true;
 }
 
+/** 将 AiErrorKind 映射为 OLED 可显示的简短英文文案（最长约 10 字符）*/
+static const char *aiErrorKindText(AiErrorKind kind)
+{
+    switch (kind)
+    {
+    case AI_ERR_CONN_FAIL:   return "CONN FAIL";
+    case AI_ERR_HTTP_STATUS: return "SRV STATUS";
+    case AI_ERR_JSON_FAIL:   return "JSON ERR";
+    case AI_ERR_CAM_BUSY:    return "CAM BUSY";
+    case AI_ERR_CAP_FAIL:    return "CAP FAIL";
+    case AI_ERR_WIFI_OFF:    return "WIFI OFF";
+    case AI_ERR_CAM_INIT:    return "CAM INIT";
+    case AI_ERR_TIMEOUT:     return "TIMEOUT";
+    default:                 return "UNKNOWN";
+    }
+}
+
+void setAiError(bool hasError, uint32_t updateMs, AiErrorKind kind)
+{
+    if (g_aiError != hasError || (hasError && g_aiErrorUpdateMs != updateMs) || g_aiErrorKind != kind)
+    {
+        g_aiError = hasError;
+        if (hasError)
+        {
+            g_aiErrorUpdateMs = updateMs;
+            g_aiErrorKind = kind;
+        }
+        else
+        {
+            g_aiErrorKind = AI_ERR_NONE;
+        }
+        g_displayDirty = true;
+    }
+}
+
 /**
  * @brief 切换 OLED 显示页面
  * @param page 目标页面编号（0 = 系统状态页；1 = 三仓重量页；2 = 识别结果页）
@@ -242,15 +280,39 @@ static void showAiResultPage()
     oledDisplay.setCursor(0, 0);
     oledDisplay.println("===Detected Result===");
 
-    // 最近 3 秒内识别过目标时，页面继续保留“Detected”状态，
-    // 避免摄像头偶发一帧没识别到就把结果立刻清掉。
+    // 渲染优先级：
+    // 1) errorRecent：错误态 → Status 显示 ERR，Err 行显示具体分类
+    //    错误由 setAiError(false,...) 显式清除（DET/NONE 到达时），不再依赖时间窗口，
+    //    避免 CAM 持续上报 ERR 时 OLED 在 ERR 和 No Target 之间来回闪烁。
+    // 2) Detected：当前帧检测到目标 → 正常显示
+    // 3) DetectedPersist：最近 N 秒内识别过目标 → 保留 Detected，避免偶发抖动
+    // 4) 否则：No Target
     static const uint32_t AI_PERSIST_MS = 3000;
-    bool showDetected = g_aiDetected ||
-                        (g_aiUpdateMs > 0 &&
-                         (millis() - g_aiUpdateMs) < AI_PERSIST_MS &&
-                         strcmp(g_aiLabel, "none") != 0);
 
-    if (showDetected)
+    const uint32_t now = millis();
+    const bool errorRecent = g_aiError;
+
+    const bool detectedPersist = (!errorRecent) &&
+                                 (g_aiUpdateMs > 0) &&
+                                 ((now - g_aiUpdateMs) < AI_PERSIST_MS) &&
+                                 (strcmp(g_aiLabel, "none") != 0);
+
+    const bool showDetected = (!errorRecent) && (g_aiDetected || detectedPersist);
+
+    if (errorRecent)
+    {
+        oledDisplay.setCursor(0, 11);
+        oledDisplay.setTextColor(SH110X_BLACK, SH110X_WHITE);
+        oledDisplay.println(" Status: ERR ");
+        oledDisplay.setTextColor(SH110X_WHITE);
+
+        oledDisplay.setCursor(0, 23);
+        oledDisplay.print("Err: ");
+        oledDisplay.println(aiErrorKindText(g_aiErrorKind));
+        oledDisplay.setCursor(0, 34);
+        oledDisplay.println("Conf:  --");
+    }
+    else if (showDetected)
     {
         // 反显 Detected 状态，醒目显示识别成功
         oledDisplay.setCursor(0, 11);
@@ -454,7 +516,9 @@ void updateOLEDDisplay()
     // AI 识别结果页在“结果保留倒计时”阶段需要持续刷新，
     // 其他页面继续依赖 dirty flag 节流即可。
     static const uint32_t AI_PERSIST_MS = 3000;
+
     bool inAiPersist = (g_oledPage == 2) &&
+                       !g_aiError &&
                        !g_aiDetected &&
                        (g_aiUpdateMs > 0) &&
                        ((millis() - g_aiUpdateMs) < AI_PERSIST_MS) &&
