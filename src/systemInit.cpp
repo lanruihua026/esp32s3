@@ -139,6 +139,9 @@ void initBoardIndicators()
 void initCameraUart()
 {
     CameraUart.begin(CAM_UART_BAUD, SERIAL_8N1, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
+    Serial.printf("[CAM-UART] 初始化: RX=GPIO%d, TX=GPIO%d, 波特率=%lu\n",
+                  CAM_UART_RX_PIN, CAM_UART_TX_PIN, CAM_UART_BAUD);
+    Serial.println("[CAM-UART] 等待ESP32-CAM心跳...");
 }
 
 void initOledModule()

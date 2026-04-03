@@ -10,6 +10,12 @@
 
 namespace
 {
+    // 调试输出控制：设为 true 可打印详细的 UART 接收和状态检测信息
+    static constexpr bool CAM_DEBUG_VERBOSE = true;
+    // 周期性状态报告间隔（毫秒）
+    static constexpr uint32_t CAM_STATUS_REPORT_INTERVAL_MS = 5000;
+    static uint32_t s_lastStatusReportMs = 0;
+
     void trimLabelInPlace(char *s)
     {
         if (s == nullptr || s[0] == '\0')
@@ -60,10 +66,37 @@ namespace
 
     void checkDeviceAndServiceStatus(uint32_t now)
     {
+        // 重新获取当前时间，避免与 parseCameraLine 中更新的时间戳不一致
+        // （loop 开始时的 now 可能比 pollCameraUart 中更新的 g_lastCamHeartbeatMs 旧）
+        now = millis();
+
         const bool heartbeatMissing =
             (g_lastCamHeartbeatMs == 0 || (now - g_lastCamHeartbeatMs) > CAM_HEARTBEAT_TIMEOUT_MS);
+
+        // 周期性状态报告
+        if (CAM_DEBUG_VERBOSE && (now - s_lastStatusReportMs) >= CAM_STATUS_REPORT_INTERVAL_MS)
+        {
+            s_lastStatusReportMs = now;
+            Serial.printf("[CAM-DBG] === 状态报告 ===\n");
+            Serial.printf("[CAM-DBG] now=%lu, lastHeartbeat=%lu, diff=%lu ms\n",
+                          now, g_lastCamHeartbeatMs,
+                          g_lastCamHeartbeatMs > 0 ? (now - g_lastCamHeartbeatMs) : 0);
+            Serial.printf("[CAM-DBG] lastAiSuccess=%lu, diff=%lu ms\n",
+                          g_lastAiSuccessMs,
+                          g_lastAiSuccessMs > 0 ? (now - g_lastAiSuccessMs) : 0);
+            Serial.printf("[CAM-DBG] camReady=%d, aiOfflineReported=%d\n",
+                          g_camReady ? 1 : 0, g_aiOfflineReported ? 1 : 0);
+            Serial.printf("[CAM-DBG] heartbeatMissing=%d (timeout=%lu ms)\n",
+                          heartbeatMissing ? 1 : 0, CAM_HEARTBEAT_TIMEOUT_MS);
+        }
+
         if (heartbeatMissing || !g_camReady)
         {
+            if (CAM_DEBUG_VERBOSE)
+            {
+                Serial.printf("[CAM-DBG] -> CAM_OFFLINE: heartbeatMissing=%d, camReady=%d\n",
+                              heartbeatMissing ? 1 : 0, g_camReady ? 1 : 0);
+            }
             setAiError(true, now, AI_ERR_CAM_OFFLINE);
             return;
         }
@@ -72,6 +105,11 @@ namespace
             (g_lastAiSuccessMs == 0 || (now - g_lastAiSuccessMs) > AI_OFFLINE_TIMEOUT_MS);
         if (g_aiOfflineReported || aiTimedOut)
         {
+            if (CAM_DEBUG_VERBOSE)
+            {
+                Serial.printf("[CAM-DBG] -> AI_OFFLINE: aiOfflineReported=%d, aiTimedOut=%d\n",
+                              g_aiOfflineReported ? 1 : 0, aiTimedOut ? 1 : 0);
+            }
             setAiError(true, now, AI_ERR_SERVICE_OFFLINE);
             return;
         }
@@ -91,18 +129,32 @@ namespace
             ++line;
         }
 
+        // 调试：打印收到的每行数据
+        if (CAM_DEBUG_VERBOSE)
+        {
+            Serial.printf("[CAM-DBG] 收到行: \"%s\" (len=%d)\n", line, strlen(line));
+        }
+
         uint32_t now = millis();
         g_lastCamHeartbeatMs = now;
 
         if (strcmp(line, "READY") == 0)
         {
             g_camReady = true;
+            if (CAM_DEBUG_VERBOSE)
+            {
+                Serial.printf("[CAM-DBG] READY -> camReady=true, heartbeat更新=%lu\n", now);
+            }
             return;
         }
 
         if (strcmp(line, "NO_WIFI") == 0)
         {
             g_camReady = false;
+            if (CAM_DEBUG_VERBOSE)
+            {
+                Serial.printf("[CAM-DBG] NO_WIFI -> camReady=false, heartbeat更新=%lu\n", now);
+            }
             return;
         }
 
@@ -164,9 +216,14 @@ void expireAiStateIfStale(uint32_t now)
 
 void pollCameraUart()
 {
+    static uint32_t s_totalBytesReceived = 0;
+    static uint32_t s_lastByteReportMs = 0;
+
     while (CameraUart.available())
     {
         const char c = static_cast<char>(CameraUart.read());
+        s_totalBytesReceived++;
+
         if (c == '\r')
         {
             continue;
@@ -186,8 +243,21 @@ void pollCameraUart()
         }
         else
         {
+            // 缓冲区溢出，丢弃当前行
+            if (CAM_DEBUG_VERBOSE)
+            {
+                Serial.println("[CAM-DBG] 警告: 行缓冲区溢出，丢弃数据");
+            }
             g_camLinePos = 0;
         }
+    }
+
+    // 每5秒报告一次接收统计
+    uint32_t now = millis();
+    if (CAM_DEBUG_VERBOSE && (now - s_lastByteReportMs) >= 5000)
+    {
+        s_lastByteReportMs = now;
+        Serial.printf("[CAM-DBG] UART统计: 累计接收 %lu 字节\n", s_totalBytesReceived);
     }
 }
 
