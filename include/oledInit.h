@@ -96,32 +96,24 @@ void setCurrentWeights(int32_t weight1, int32_t weight2, int32_t weight3);
 void setAiResult(bool detected, const char *label, float conf, uint32_t updateMs);
 
 /**
- * AI 错误分类：区分链路中不同环节的故障来源，方便 OLED 一行定位到具体问题。
- * 来源分两路：
- *   CAM 侧   — ESP32-CAM 通过串口上报的 ERR,<msg> 解析而来
- *   S3 侧    — ESP32-S3 本机判定 AI 数据超时
+ * AI 错误分类：识别页只保留两种用户可感知错误。
+ * - AI_ERR_CAM_OFFLINE: 摄像头板离线，或摄像头侧 WiFi 未连接
+ * - AI_ERR_SERVICE_OFFLINE: 摄像头在线，但推理后端不可用
  */
 enum AiErrorKind : uint8_t {
     AI_ERR_NONE = 0,
-    AI_ERR_CONN_FAIL,    // 推理服务不可达（http_connect_failed）
-    AI_ERR_HTTP_STATUS,  // 服务返回非 200（http_status）
-    AI_ERR_JSON_FAIL,    // 响应 JSON 解析失败（json_parse_failed）
-    AI_ERR_CAM_BUSY,     // 相机被 MJPEG 流占用（camera_busy）
-    AI_ERR_CAP_FAIL,     // 拍照采帧失败（capture_failed）
-    AI_ERR_WIFI_OFF,     // CAM 侧 WiFi 断连（wifi_disconnected）
-    AI_ERR_CAM_INIT,     // 相机初始化失败（camera_init_failed）
-    AI_ERR_TIMEOUT,      // S3 侧判定：超过 AI_RESULT_STALE_MS 无新报文
-    AI_ERR_UNKNOWN       // 其他未知错误
+    AI_ERR_CAM_OFFLINE,
+    AI_ERR_SERVICE_OFFLINE
 };
 
 /**
  * @brief 更新 AI 错误态（例如推理服务未开启、网络异常等）
  * @param hasError 是否处于错误态
  * @param updateMs 本次错误更新的 millis() 时间戳
- * @param kind     错误分类（默认 AI_ERR_UNKNOWN）
+ * @param kind     错误分类（默认 AI_ERR_CAM_OFFLINE）
  * 业务含义：识别结果页在错误态时 Status 行显示 ERR，Label 行显示具体错误类型。
  */
-void setAiError(bool hasError, uint32_t updateMs, AiErrorKind kind = AI_ERR_UNKNOWN);
+void setAiError(bool hasError, uint32_t updateMs, AiErrorKind kind = AI_ERR_CAM_OFFLINE);
 
 /**
  * @brief 切换 OLED 当前显示页面

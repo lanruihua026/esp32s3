@@ -2,6 +2,7 @@
 #define HX711_2_H
 
 #include <Arduino.h>
+#include <Preferences.h>
 
 /**
  * @brief 初始化第二个 HX711 称重模块（DT=GPIO11, SCK=GPIO12，不自动去皮）
@@ -60,6 +61,26 @@ float getZeroOffset2();
  * @param offset 要恢复的零点值（原始 ADC）
  */
 void setZeroOffset2(float offset);
+
+/**
+ * @brief 初始化 2 号 HX711，并从 NVS 恢复校准系数与零点
+ * @param prefs              Preferences 对象
+ * @param prefsOk            Preferences 是否可用
+ * @param defaultScale       默认校准系数（raw / g）
+ * @param bootEmptyThreshold 空仓判定阈值（g）
+ * @return true 初始化成功；false 初始化失败
+ */
+bool initHx711Channel2(Preferences &prefs, bool prefsOk, float defaultScale, float bootEmptyThreshold);
+
+/**
+ * @brief 处理单条 2 号 HX711 标定命令
+ * @param cmd           已转为大写的命令字符串
+ * @param prefs         Preferences 对象
+ * @param prefsOk       Preferences 是否可用
+ * @param currentWeight 当前重量（g），供 STATUS 打印
+ * @return true 命令已由本通道处理；false 不是本通道命令
+ */
+bool handleHx711Command2(const char *cmd, Preferences &prefs, bool prefsOk, int32_t currentWeight);
 
 
 #endif // HX711_2_H

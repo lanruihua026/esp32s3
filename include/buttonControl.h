@@ -17,6 +17,9 @@ typedef void (*ButtonCallback)();
 // 初始化按键引脚和中断。
 void setupButtons();
 
+// 初始化按键并绑定 OLED 翻页行为。
+void initButtonsForOledNavigation();
+
 // 注册按键 1/2 的业务回调。
 void setButton1Callback(ButtonCallback cb);
 void setButton2Callback(ButtonCallback cb);

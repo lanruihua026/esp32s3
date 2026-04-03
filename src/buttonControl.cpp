@@ -1,4 +1,5 @@
 #include "buttonControl.h"
+#include "oledInit.h"
 
 // 两个按键最终触发的业务回调。
 static ButtonCallback g_btn1Cb = nullptr;
@@ -36,6 +37,13 @@ void setupButtons()
 
     attachInterrupt(digitalPinToInterrupt(BTN1_PIN), btn1ISR, FALLING);
     attachInterrupt(digitalPinToInterrupt(BTN2_PIN), btn2ISR, FALLING);
+}
+
+void initButtonsForOledNavigation()
+{
+    setupButtons();
+    setButton1Callback(prevOledPage);
+    setButton2Callback(toggleOledPage);
 }
 
 void setButton1Callback(ButtonCallback cb)

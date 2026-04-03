@@ -173,15 +173,10 @@ static const char *aiErrorKindText(AiErrorKind kind)
 {
     switch (kind)
     {
-    case AI_ERR_CONN_FAIL:   return "CONN FAIL";
-    case AI_ERR_HTTP_STATUS: return "SRV STATUS";
-    case AI_ERR_JSON_FAIL:   return "JSON ERR";
-    case AI_ERR_CAM_BUSY:    return "CAM BUSY";
-    case AI_ERR_CAP_FAIL:    return "CAP FAIL";
-    case AI_ERR_WIFI_OFF:    return "WIFI OFF";
-    case AI_ERR_CAM_INIT:    return "CAM INIT";
-    case AI_ERR_TIMEOUT:     return "TIMEOUT";
-    default:                 return "UNKNOWN";
+    case AI_ERR_CAM_OFFLINE:     return "CAM OFFLINE";  // 摄像头设备离线
+    case AI_ERR_SERVICE_OFFLINE: return "AI OFFLINE";   // AI 服务离线
+    case AI_ERR_NONE:
+    default:                     return "--";
     }
 }
 

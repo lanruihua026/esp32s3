@@ -2,6 +2,7 @@
 #define HX711_H
 
 #include <Arduino.h>
+#include <Preferences.h>
 
 /**
  * @brief 初始化 HX711 称重模块（不自动去皮）
@@ -60,6 +61,26 @@ float getZeroOffset();
  * @param offset 要恢复的零点值（原始 ADC）
  */
 void setZeroOffset(float offset);
+
+/**
+ * @brief 初始化 1 号 HX711，并从 NVS 恢复校准系数与零点
+ * @param prefs              Preferences 对象
+ * @param prefsOk            Preferences 是否可用
+ * @param defaultScale       默认校准系数（raw / g）
+ * @param bootEmptyThreshold 空仓判定阈值（g）
+ * @return true 初始化成功；false 初始化失败
+ */
+bool initHx711Channel1(Preferences &prefs, bool prefsOk, float defaultScale, float bootEmptyThreshold);
+
+/**
+ * @brief 轮询串口中的 HX711 标定命令
+ * @param prefs          Preferences 对象
+ * @param prefsOk        Preferences 是否可用
+ * @param currentWeight1 1 号仓当前重量（g）
+ * @param currentWeight2 2 号仓当前重量（g）
+ * @param currentWeight3 3 号仓当前重量（g）
+ */
+void pollHx711SerialCommands(Preferences &prefs, bool prefsOk, int32_t currentWeight1, int32_t currentWeight2, int32_t currentWeight3);
 
 
 #endif // HX711_H
