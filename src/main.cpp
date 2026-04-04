@@ -1,8 +1,3 @@
-/**
- * @file main.cpp
- * @brief 电子废弃物识别分拣主入口
- */
-
 #include <Arduino.h>
 #include "appState.h"
 #include "binControl.h"
@@ -42,6 +37,7 @@ void setup()
     setInitModuleStatus(INIT_MODULE_BUTTON, INIT_RUNNING, "IRQ");
     showBootProgress(84, "Buttons");
     initButtonsForOledNavigation();
+    setButton3Callback(silenceOverflowAlarmBuzzer);
     setInitModuleStatus(INIT_MODULE_BUTTON, INIT_OK, "Ready");
 
     initMqttModule();

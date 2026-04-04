@@ -3,9 +3,10 @@
 
 #include <Arduino.h>
 
-// 两个实体按键当前只用于切换 OLED 页面。
+// 按键 1/2：OLED 翻页；按键 3（GPIO21）：满溢时解除声光报警（灯+蜂鸣）。
 #define BTN1_PIN 9
 #define BTN2_PIN 10
+#define BTN3_PIN 21
 
 // 按键采用“中断捕获 + 主循环消抖”的方案。
 #define BTN_DEBOUNCE_MS 20
@@ -20,9 +21,10 @@ void setupButtons();
 // 初始化按键并绑定 OLED 翻页行为。
 void initButtonsForOledNavigation();
 
-// 注册按键 1/2 的业务回调。
+// 注册按键 1/2/3 的业务回调。
 void setButton1Callback(ButtonCallback cb);
 void setButton2Callback(ButtonCallback cb);
+void setButton3Callback(ButtonCallback cb);
 
 // 在 loop() 中持续调用，用于做消抖和回调分发。
 void pollButtons();
