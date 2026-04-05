@@ -46,6 +46,9 @@ static bool g_mqttOk = false;
 // 三路 HX711 是否初始化成功（用于重量页分路与状态页摘要）
 static bool g_hxChOk[3] = {true, true, true};
 
+// 三路 HX711 是否超量程（读数 > HX711_MAX_RANGE_G）；超量程时重量页显示 OVER 而非克数
+static bool g_hxOverRange[3] = {false, false, false};
+
 // AI 置信度阈值（与 main g_aiConfThreshold 同步）
 static float g_aiConfThrDisplay = -1.0f;
 
@@ -97,6 +100,17 @@ void setHx711ChannelReady(bool ch1, bool ch2, bool ch3)
         g_hxChOk[0] = ch1;
         g_hxChOk[1] = ch2;
         g_hxChOk[2] = ch3;
+        g_displayDirty = true;
+    }
+}
+
+void setWeightOverRange(bool ch1, bool ch2, bool ch3)
+{
+    if (g_hxOverRange[0] != ch1 || g_hxOverRange[1] != ch2 || g_hxOverRange[2] != ch3)
+    {
+        g_hxOverRange[0] = ch1;
+        g_hxOverRange[1] = ch2;
+        g_hxOverRange[2] = ch3;
         g_displayDirty = true;
     }
 }
@@ -402,6 +416,11 @@ static void showBinWeightPage()
         if (!g_hxChOk[i])
         {
             snprintf(lineBuf, sizeof(lineBuf), "B%u: ---      ERR", i + 1);
+        }
+        else if (g_hxOverRange[i])
+        {
+            // 超量程：读数超过传感器标称量程上限，不作为正常重量显示
+            snprintf(lineBuf, sizeof(lineBuf), "B%u:OVER  100%% FULL", i + 1);
         }
         else
         {

@@ -37,9 +37,31 @@ namespace
  */
 void updateWeightsAndAlarm()
 {
-    g_currentWeight1 = static_cast<int32_t>(getWeight());
-    g_currentWeight2 = static_cast<int32_t>(getWeight2());
-    g_currentWeight3 = static_cast<int32_t>(getWeight3());
+    const int32_t raw1 = static_cast<int32_t>(getWeight());
+    const int32_t raw2 = static_cast<int32_t>(getWeight2());
+    const int32_t raw3 = static_cast<int32_t>(getWeight3());
+
+    // 判断各路是否超出传感器标称量程上限（5 kg）
+    const bool over1 = (raw1 > HX711_MAX_RANGE_G);
+    const bool over2 = (raw2 > HX711_MAX_RANGE_G);
+    const bool over3 = (raw3 > HX711_MAX_RANGE_G);
+
+    if (over1 || over2 || over3)
+    {
+        Serial.printf("[WEIGHT] 超量程: B1=%ldg%s B2=%ldg%s B3=%ldg%s\n",
+                      (long)raw1, over1 ? "(OVER)" : "",
+                      (long)raw2, over2 ? "(OVER)" : "",
+                      (long)raw3, over3 ? "(OVER)" : "");
+    }
+
+    // 超量程路钳位到量程上限，使满载告警逻辑（weight >= g_fullWeightG）仍然成立；
+    // 负数读数归零，属于传感器噪声或去皮误差，不视为异常
+    g_currentWeight1 = over1 ? HX711_MAX_RANGE_G : (raw1 < 0 ? 0 : raw1);
+    g_currentWeight2 = over2 ? HX711_MAX_RANGE_G : (raw2 < 0 ? 0 : raw2);
+    g_currentWeight3 = over3 ? HX711_MAX_RANGE_G : (raw3 < 0 ? 0 : raw3);
+
+    // 同步超量程状态到 OLED，让重量页显示 OVER 而非普通克数
+    setWeightOverRange(over1, over2, over3);
 
     setCurrentWeights(g_currentWeight1, g_currentWeight2, g_currentWeight3);
 

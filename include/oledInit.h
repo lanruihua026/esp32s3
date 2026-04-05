@@ -152,6 +152,12 @@ void setRuntimeHealth(bool wifiOk, bool wifiInitTimeout, bool hx711Ok, bool mqtt
 void setHx711ChannelReady(bool ch1, bool ch2, bool ch3);
 
 /**
+ * @brief 同步三路称重超量程状态（重量页超量程时显示 OVER 而非克数）
+ * @param ch1/ch2/ch3 各路是否超过传感器量程上限（HX711_MAX_RANGE_G）
+ */
+void setWeightOverRange(bool ch1, bool ch2, bool ch3);
+
+/**
  * @brief 同步 AI 置信度阈值（识别页 Thr，与 g_aiConfThreshold 一致）
  */
 void setAiConfThreshold(float threshold);
