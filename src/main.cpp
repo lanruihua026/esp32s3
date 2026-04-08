@@ -67,6 +67,7 @@ void loop()
 
     tryReconnectWiFi(now);
     oneNetMqttLoop();
+    processDeferredPropertyReport();
     syncRuntimeHealth();
 
     if ((now - g_lastOledUpdateMs) >= OLED_MIN_UPDATE_INTERVAL_MS)

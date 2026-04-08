@@ -13,5 +13,6 @@ void initServoModule();
 void initMqttModule();
 void initTimers();
 void tryReconnectWiFi(uint32_t now);
+void processDeferredPropertyReport();
 
 #endif

@@ -61,10 +61,10 @@ namespace
      * @brief 平台下行消息回调
      *
      * 收到 thing/property/set 时：
-     * 1. 调用用户注册的处理回调（解析 JSON、更新阈值等）
-     * 2. 向 thing/property/set_reply 发布应答
+     * 1. 尽快向 thing/property/set_reply 发布应答
      *    ——这是 OneNET 物模型协议的强制要求：
      *    若设备不回复，平台将该命令标记为超时，后续下发的命令也会被阻塞。
+     * 2. 再调用用户注册的处理回调（解析 JSON、更新阈值等）
      */
     void mqttCallback(char *topic, byte *payload, unsigned int length)
     {
@@ -73,13 +73,7 @@ namespace
             return; // 不是 property/set 消息，忽略
         }
 
-        // 先调用用户业务回调（main.cpp 的 onPropertySet）
-        if (gPropertySetCb != nullptr)
-        {
-            gPropertySetCb(reinterpret_cast<const char *>(payload), length);
-        }
-
-        // === OneNET 协议：必须回复 set_reply ===
+        // === OneNET 协议：必须尽快回复 set_reply ===
         // 从 payload 中提取消息 id，用于回复中与请求配对。
         // payload 格式：{"id":"xxx","version":"1.0","params":{...}}
         // 注意：mqttCallback 由 PubSubClient::loop() 在主循环中调用，并非中断上下文；
@@ -106,6 +100,12 @@ namespace
                  "{\"id\":\"%s\",\"code\":200,\"msg\":\"success\"}", msgId);
         bool sent = gMqttClient.publish(gPropertySetReplyTopic.c_str(), replyBuf, false);
         Serial.printf("[OneNET] SET_REPLY id=%s sent=%d\n", msgId, sent ? 1 : 0);
+
+        // 回执发出后再执行业务逻辑，避免 NVS 写入/属性补上报拖慢平台 ACK。
+        if (gPropertySetCb != nullptr)
+        {
+            gPropertySetCb(reinterpret_cast<const char *>(payload), length);
+        }
     }
 
     /**

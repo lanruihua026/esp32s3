@@ -22,6 +22,7 @@
 namespace
 {
     Adafruit_NeoPixel boardRgb(RGB_LED_COUNT, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
+    bool g_propertyReportPending = false;
 
     bool allHx711Ready()
     {
@@ -96,7 +97,8 @@ namespace
 
         if (changed)
         {
-            reportPropertiesNow();
+            // MQTT 回调内只标记“需要补上报”，由主循环异步发送，避免在回调栈内嵌套 publish。
+            g_propertyReportPending = true;
         }
     }
 }
@@ -121,6 +123,17 @@ void syncRuntimeHealth()
     setRuntimeHealth(wifiConnected, g_wifiInitTimeout, allHx711Ready(), oneNetMqttConnected());
     setHx711ChannelReady(g_hx711_1InitOk, g_hx711_2InitOk, g_hx711_3InitOk);
     setAiConfThreshold(g_aiConfThreshold);
+}
+
+void processDeferredPropertyReport()
+{
+    if (!g_propertyReportPending || !oneNetMqttConnected())
+    {
+        return;
+    }
+
+    g_propertyReportPending = false;
+    reportPropertiesNow();
 }
 
 void initBoardIndicators()
