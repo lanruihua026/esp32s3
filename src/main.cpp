@@ -26,8 +26,17 @@ void setup()
     // 运行时保护：NVS 历史值若超出合法范围 [100, 5000]，重置为默认值，避免异常配置干扰告警逻辑
     if (g_fullWeightG < 100 || g_fullWeightG > 5000)
     {
-        Serial.printf("[CONFIG] NVS full_w=%d 超出合法范围 [100, 5000]，已重置为默认值 1000 g\n", g_fullWeightG);
+        Serial.printf("[CONFIG] NVS full_w=%d out of range [100,5000], reset to 1000 g\n", g_fullWeightG);
         g_fullWeightG = 1000;
+    }
+    if (!(g_aiConfThreshold >= 0.0f && g_aiConfThreshold <= 1.0f))
+    {
+        Serial.printf("[CONFIG] NVS ai_conf=%.4f out of range [0,1], reset to 0.0000\n", g_aiConfThreshold);
+        g_aiConfThreshold = 0.0f;
+        if (g_prefsOk)
+        {
+            gPrefs.putFloat("ai_conf", g_aiConfThreshold);
+        }
     }
     Serial.printf("[CONFIG] overflow_threshold_g=%d g, ai_conf_threshold=%.4f (%s)\n",
                   g_fullWeightG, g_aiConfThreshold, g_prefsOk ? "from NVS" : "defaults");

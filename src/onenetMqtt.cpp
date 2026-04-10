@@ -73,6 +73,13 @@ namespace
             return; // 不是 property/set 消息，忽略
         }
 
+        char payloadCopy[512] = {0};
+        const unsigned int copyLen = (length < sizeof(payloadCopy) - 1) ? length : sizeof(payloadCopy) - 1;
+        if (copyLen > 0)
+        {
+            memcpy(payloadCopy, payload, copyLen);
+        }
+
         // === OneNET 协议：必须尽快回复 set_reply ===
         // 从 payload 中提取消息 id，用于回复中与请求配对。
         // payload 格式：{"id":"xxx","version":"1.0","params":{...}}
@@ -82,7 +89,7 @@ namespace
         {
             // 仅解析顶层 id 字段，使用小容量文档避免不必要的内存占用。
             JsonDocument idDoc;
-            DeserializationError err = deserializeJson(idDoc, payload, length);
+            DeserializationError err = deserializeJson(idDoc, payloadCopy, copyLen);
             if (err == DeserializationError::Ok)
             {
                 const char *parsedId = idDoc["id"] | "0";
@@ -104,7 +111,7 @@ namespace
         // 回执发出后再执行业务逻辑，避免 NVS 写入/属性补上报拖慢平台 ACK。
         if (gPropertySetCb != nullptr)
         {
-            gPropertySetCb(reinterpret_cast<const char *>(payload), length);
+            gPropertySetCb(payloadCopy, copyLen);
         }
     }
 

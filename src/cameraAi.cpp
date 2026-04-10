@@ -77,7 +77,7 @@ namespace
         if (CAM_DEBUG_VERBOSE && (now - s_lastStatusReportMs) >= CAM_STATUS_REPORT_INTERVAL_MS)
         {
             s_lastStatusReportMs = now;
-            Serial.printf("[CAM-DBG] === 状态报告 ===\n");
+            Serial.printf("[CAM-DBG] === STATUS REPORT ===\n");
             Serial.printf("[CAM-DBG] now=%lu, lastHeartbeat=%lu, diff=%lu ms\n",
                           now, g_lastCamHeartbeatMs,
                           g_lastCamHeartbeatMs > 0 ? (now - g_lastCamHeartbeatMs) : 0);
@@ -132,7 +132,7 @@ namespace
         // 调试：打印收到的每行数据
         if (CAM_DEBUG_VERBOSE)
         {
-            Serial.printf("[CAM-DBG] 收到行: \"%s\" (len=%d)\n", line, strlen(line));
+            Serial.printf("[CAM-DBG] RX LINE: \"%s\" (len=%d)\n", line, strlen(line));
         }
 
         uint32_t now = millis();
@@ -143,7 +143,7 @@ namespace
             g_camReady = true;
             if (CAM_DEBUG_VERBOSE)
             {
-                Serial.printf("[CAM-DBG] READY -> camReady=true, heartbeat更新=%lu\n", now);
+                Serial.printf("[CAM-DBG] READY -> camReady=true, heartbeat=%lu\n", now);
             }
             return;
         }
@@ -153,7 +153,7 @@ namespace
             g_camReady = false;
             if (CAM_DEBUG_VERBOSE)
             {
-                Serial.printf("[CAM-DBG] NO_WIFI -> camReady=false, heartbeat更新=%lu\n", now);
+                Serial.printf("[CAM-DBG] NO_WIFI -> camReady=false, heartbeat=%lu\n", now);
             }
             return;
         }
@@ -246,7 +246,7 @@ void pollCameraUart()
             // 缓冲区溢出，丢弃当前行
             if (CAM_DEBUG_VERBOSE)
             {
-                Serial.println("[CAM-DBG] 警告: 行缓冲区溢出，丢弃数据");
+                Serial.println("[CAM-DBG] WARN: line buffer overflow, drop current line");
             }
             g_camLinePos = 0;
         }
@@ -257,7 +257,7 @@ void pollCameraUart()
     if (CAM_DEBUG_VERBOSE && (now - s_lastByteReportMs) >= 5000)
     {
         s_lastByteReportMs = now;
-        Serial.printf("[CAM-DBG] UART统计: 累计接收 %lu 字节\n", s_totalBytesReceived);
+        Serial.printf("[CAM-DBG] UART STATS: total_rx=%lu bytes\n", s_totalBytesReceived);
     }
 }
 

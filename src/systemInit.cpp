@@ -31,9 +31,10 @@ namespace
 
     void onPropertySet(const char *payload, unsigned int len)
     {
-        char buf[384] = {0};
+        char buf[512] = {0};
         unsigned int copyLen = (len < sizeof(buf) - 1) ? len : sizeof(buf) - 1;
         memcpy(buf, payload, copyLen);
+        Serial.printf("[CONFIG] property/set rx len=%u payload=%s\n", len, buf);
 
         JsonDocument doc;
         if (deserializeJson(doc, buf) != DeserializationError::Ok)
@@ -99,6 +100,7 @@ namespace
         {
             // MQTT 回调内只标记“需要补上报”，由主循环异步发送，避免在回调栈内嵌套 publish。
             g_propertyReportPending = true;
+            Serial.println("[CONFIG] property/set applied; schedule report");
         }
     }
 }
@@ -133,6 +135,7 @@ void processDeferredPropertyReport()
     }
 
     g_propertyReportPending = false;
+    Serial.println("[CONFIG] report deferred properties now");
     reportPropertiesNow();
 }
 
@@ -152,9 +155,9 @@ void initBoardIndicators()
 void initCameraUart()
 {
     CameraUart.begin(CAM_UART_BAUD, SERIAL_8N1, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
-    Serial.printf("[CAM-UART] 初始化: RX=GPIO%d, TX=GPIO%d, 波特率=%lu\n",
+    Serial.printf("[CAM-UART] INIT: RX=GPIO%d, TX=GPIO%d, baud=%lu\n",
                   CAM_UART_RX_PIN, CAM_UART_TX_PIN, CAM_UART_BAUD);
-    Serial.println("[CAM-UART] 等待ESP32-CAM心跳...");
+    Serial.println("[CAM-UART] waiting for ESP32-CAM heartbeat...");
 }
 
 void initOledModule()

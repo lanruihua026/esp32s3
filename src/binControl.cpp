@@ -48,7 +48,7 @@ void updateWeightsAndAlarm()
 
     if (over1 || over2 || over3)
     {
-        Serial.printf("[WEIGHT] 超量程: B1=%ldg%s B2=%ldg%s B3=%ldg%s\n",
+        Serial.printf("[WEIGHT] OVER_RANGE: B1=%ldg%s B2=%ldg%s B3=%ldg%s\n",
                       (long)raw1, over1 ? "(OVER)" : "",
                       (long)raw2, over2 ? "(OVER)" : "",
                       (long)raw3, over3 ? "(OVER)" : "");
