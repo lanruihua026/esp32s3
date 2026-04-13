@@ -28,8 +28,3 @@ uint32_t wifiBootConnectStartMillis()
 {
     return s_wifiBootStartMs;
 }
-
-void setupWiFi()
-{
-    startWiFiConnect();
-}

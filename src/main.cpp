@@ -1,95 +1,91 @@
-#include <Arduino.h>
-#include "appState.h"
-#include "binControl.h"
-#include "buttonControl.h"
-#include "cameraAi.h"
-#include "connectToWiFi.h"
-#include "hx711.h"
-#include "oledInit.h"
-#include "onenetMqtt.h"
-#include "systemInit.h"
+#include <Arduino.h>       // Arduino 基础功能
+#include "appState.h"      // 全局运行状态
+#include "binControl.h"    // 仓体控制相关接口
+#include "buttonControl.h" // 按键处理相关接口
+#include "cameraAi.h"      // 摄像头与 AI 识别相关接口
+#include "connectToWiFi.h" // WiFi 连接相关接口
+#include "hx711.h"         // HX711 称重传感器相关接口
+#include "oledInit.h"      // OLED 显示相关接口
+#include "onenetMqtt.h"    // OneNet MQTT 相关接口
+#include "systemInit.h"    // 系统初始化相关接口
 
-void setup()
+void setup() // 系统上电初始化入口
 {
-    Serial.begin(115200);
-
-    g_prefsOk = gPrefs.begin("sysconf", false);
-    if (!g_prefsOk)
+    Serial.begin(115200);                       // 初始化串口，便于调试输出
+    g_prefsOk = gPrefs.begin("sysconf", false); // 打开 NVS 配置区，false 表示只读
+    if (!g_prefsOk)                             // 判断配置区是否打开成功
     {
-        Serial.println("[NVS] Preferences begin failed; using defaults, persistence disabled");
+        Serial.println("[NVS] Preferences begin failed; using defaults, persistence disabled"); // 提示使用默认值
     }
-    if (g_prefsOk)
+    if (g_prefsOk) // NVS 可用时读取保存的配置
     {
-        g_fullWeightG = gPrefs.getInt("full_w", 1000);
-        g_aiConfThreshold = gPrefs.getFloat("ai_conf", 0.0f);
+        g_fullWeightG = gPrefs.getInt("full_w", 1000);        // 读取满载重量，默认 1000g
+        g_aiConfThreshold = gPrefs.getFloat("ai_conf", 0.0f); // 读取 AI 置信度阈值，默认 0
     }
-    // 运行时保护：NVS 历史值若超出合法范围 [100, 5000]，重置为默认值，避免异常配置干扰告警逻辑
-    if (g_fullWeightG < 100 || g_fullWeightG > 5000)
+    if (g_fullWeightG < 100 || g_fullWeightG > 5000) // 检查重量阈值是否越界
     {
-        Serial.printf("[CONFIG] NVS full_w=%d out of range [100,5000], reset to 1000 g\n", g_fullWeightG);
-        g_fullWeightG = 1000;
+        Serial.printf("[CONFIG] NVS full_w=%d out of range [100,5000], reset to 1000 g\n", g_fullWeightG); // 打印越界信息
+        g_fullWeightG = 1000;                                                                              // 恢复默认值
     }
-    if (!(g_aiConfThreshold >= 0.0f && g_aiConfThreshold <= 1.0f))
+    if (!(g_aiConfThreshold >= 0.0f && g_aiConfThreshold <= 1.0f)) // 检查 AI 阈值是否在 0~1 之间
     {
-        Serial.printf("[CONFIG] NVS ai_conf=%.4f out of range [0,1], reset to 0.0000\n", g_aiConfThreshold);
-        g_aiConfThreshold = 0.0f;
-        if (g_prefsOk)
+        Serial.printf("[CONFIG] NVS ai_conf=%.4f out of range [0,1], reset to 0.0000\n", g_aiConfThreshold); // 打印越界信息
+        g_aiConfThreshold = 0.0f;                                                                            // 恢复默认值
+        if (g_prefsOk)                                                                                       // 仅在 NVS 可用时回写
         {
-            gPrefs.putFloat("ai_conf", g_aiConfThreshold);
+            gPrefs.putFloat("ai_conf", g_aiConfThreshold); // 将修正后的阈值写回配置区
         }
     }
-    Serial.printf("[CONFIG] overflow_threshold_g=%d g, ai_conf_threshold=%.4f (%s)\n",
-                  g_fullWeightG, g_aiConfThreshold, g_prefsOk ? "from NVS" : "defaults");
+    Serial.printf("[CONFIG] overflow_threshold_g=%d g, ai_conf_threshold=%.4f (%s)\n",    // 输出最终配置
+                  g_fullWeightG, g_aiConfThreshold, g_prefsOk ? "from NVS" : "defaults"); // 打印配置来源
 
-    initBoardIndicators();
-    initCameraUart();
-    initOledModule();
-    startWiFiConnect();
-    initHx711Modules();
-    initWiFiWithTimeout();
-    initServoModule();
+    initBoardIndicators(); // 初始化板载指示灯
+    initCameraUart();      // 初始化摄像头串口
+    initOledModule();      // 初始化 OLED 显示屏
+    startWiFiConnect();    // 开始 WiFi 连接流程
+    initHx711Modules();    // 初始化称重传感器模块
+    initWiFiWithTimeout(); // 等待 WiFi 连接，带超时控制
+    initServoModule();     // 初始化舵机控制模块
 
-    setInitModuleStatus(INIT_MODULE_BUTTON, INIT_RUNNING, "IRQ");
-    showBootProgress(84, "Buttons");
-    initButtonsForOledNavigation();
-    setButton3Callback(silenceOverflowAlarmBuzzer);
-    setInitModuleStatus(INIT_MODULE_BUTTON, INIT_OK, "Ready");
+    setInitModuleStatus(INIT_MODULE_BUTTON, INIT_RUNNING, "IRQ"); // 标记按键模块正在初始化
+    showBootProgress(84, "Buttons");                              // 刷新启动进度条
+    initButtonsForOledNavigation();                               // 初始化用于 OLED 菜单导航的按键
+    setButton3Callback(silenceOverflowAlarmBuzzer);               // 绑定三号按键的静音回调
+    setInitModuleStatus(INIT_MODULE_BUTTON, INIT_OK, "Ready");    // 标记按键模块初始化完成
 
-    initMqttModule();
+    initMqttModule();                  // 初始化 MQTT 云端通信模块
+    showBootProgress(100, "Starting"); // 启动进度显示到 100%
+    delay(200);                        // 短暂等待，给外设一点稳定时间
 
-    showBootProgress(100, "Starting");
-    delay(200);
-
-    initTimers();
-    syncRuntimeHealth();
+    initTimers();        // 启动定时器任务
+    syncRuntimeHealth(); // 同步当前运行状态
 }
 
-void loop()
+void loop() // 主循环，持续执行业务逻辑
 {
-    const uint32_t now = millis();
+    const uint32_t now = millis(); // 获取当前运行时间
 
-    pollHx711SerialCommands(gPrefs, g_prefsOk, g_currentWeight1, g_currentWeight2, g_currentWeight3);
-    pollCameraUart();
-    expireAiStateIfStale(now);
-    updateServoByAiResult();
-    pollButtons();
+    pollHx711SerialCommands(gPrefs, g_prefsOk, g_currentWeight1, g_currentWeight2, g_currentWeight3); // 轮询称重传感器串口命令
+    pollCameraUart();                                                                                 // 读取摄像头串口数据
+    expireAiStateIfStale(now);                                                                        // 检查 AI 状态是否过期
+    updateServoByAiResult();                                                                          // 根据 AI 结果更新舵机状态
+    pollButtons();                                                                                    // 扫描按键输入
 
-    tryReconnectWiFi(now);
-    oneNetMqttLoop();
-    processDeferredPropertyReport();
-    syncRuntimeHealth();
+    tryReconnectWiFi(now);           // 发现断线时尝试重连 WiFi
+    oneNetMqttLoop();                // 处理 MQTT 收发
+    processDeferredPropertyReport(); // 处理延迟上报的属性
+    syncRuntimeHealth();             // 同步运行健康状态
 
-    if ((now - g_lastOledUpdateMs) >= OLED_MIN_UPDATE_INTERVAL_MS)
+    if ((now - g_lastOledUpdateMs) >= OLED_MIN_UPDATE_INTERVAL_MS) // 判断是否到了 OLED 刷新周期
     {
-        updateOLEDDisplay();
-        g_lastOledUpdateMs = now;
+        updateOLEDDisplay();      // 刷新 OLED 显示内容
+        g_lastOledUpdateMs = now; // 记录本次刷新时间
     }
 
-    if ((now - g_lastSampleMs) >= WEIGHT_SAMPLE_INTERVAL_MS)
+    if ((now - g_lastSampleMs) >= WEIGHT_SAMPLE_INTERVAL_MS) // 判断是否到了重量采样周期
     {
-        g_lastSampleMs = now;
-        updateWeightsAndAlarm();
+        g_lastSampleMs = now;    // 记录本次采样时间
+        updateWeightsAndAlarm(); // 更新重量并检查告警
     }
-
-    uploadPropertiesIfNeeded(now);
+    uploadPropertiesIfNeeded(now); // 按需上报设备属性
 }

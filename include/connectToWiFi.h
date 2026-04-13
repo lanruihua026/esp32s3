@@ -18,7 +18,4 @@ bool wifiBootConnectStarted();
 // 首次 startWiFiConnect() 时的 millis()，未启动则返回 0。
 uint32_t wifiBootConnectStartMillis();
 
-// 兼容旧名：等价于 startWiFiConnect()。
-void setupWiFi();
-
 #endif

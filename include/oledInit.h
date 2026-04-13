@@ -17,10 +17,6 @@
 #define SDA_PIN 4
 #define SCL_PIN 5
 
-// ===== 业务阈值 =====
-// HX711 传感器量程 5000g，实际最大载重量设定为 1000g
-#define HX711_SENSOR_MAX 5000 // 传感器量程上限（g）
-
 // 全局 OLED 对象（在 oledInit.cpp 中定义）
 extern Adafruit_SH1106G oledDisplay;
 
@@ -74,11 +70,6 @@ bool isOLEDReady();
  * 该函数应在 loop() 中持续调用，用于更新动画与状态页。
  */
 void updateOLEDDisplay();
-
-/**
- * @brief 更新当前重量（兼容旧接口，仅更新1号仓）
- */
-void setCurrentWeight(int32_t weight);
 
 /**
  * @brief 更新三个仓格的当前重量（影响三仓重量页显示）

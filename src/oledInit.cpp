@@ -124,20 +124,6 @@ void setAiConfThreshold(float threshold)
     }
 }
 
-/**
- * @brief 设置当前重量
- * @param weight 当前重量（单位：克）
- * 说明：这个函数会更新全局重量状态，供 OLED 显示、告警判断和云上报复用。
- */
-void setCurrentWeight(int32_t weight)
-{
-    if (currentWeight1 != weight)
-    {
-        currentWeight1 = weight;
-        g_displayDirty = true;
-    }
-}
-
 void setCurrentWeights(int32_t weight1, int32_t weight2, int32_t weight3)
 {
     if (currentWeight1 != weight1 || currentWeight2 != weight2 || currentWeight3 != weight3)

@@ -73,6 +73,7 @@ namespace
             return; // 不是 property/set 消息，忽略
         }
 
+        // 先拷贝到本地缓冲区，避免直接操作 MQTT 回调入参。
         char payloadCopy[512] = {0};
         const unsigned int copyLen = (length < sizeof(payloadCopy) - 1) ? length : sizeof(payloadCopy) - 1;
         if (copyLen > 0)
@@ -164,7 +165,7 @@ namespace
         // 连接成功后订阅平台应答和属性下发主题。
         // QoS 1：保证至少收到一次，防止平台下发指令因网络抖动丢失。
         bool subReply = gMqttClient.subscribe(gPropertyPostReplyTopic.c_str(), 1);
-        bool subSet   = gMqttClient.subscribe(gPropertySetTopic.c_str(), 1);
+        bool subSet = gMqttClient.subscribe(gPropertySetTopic.c_str(), 1);
         Serial.printf("[OneNET] SUB post/reply=%d  property/set=%d\n",
                       subReply ? 1 : 0, subSet ? 1 : 0);
     }
@@ -184,17 +185,16 @@ void oneNetMqttBegin(const OneNetMqttConfig &config)
     gConfig = config;
 
     // OneNET 物模型标准 Topic。
-    gPropertyPostTopic      = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/post";
+    gPropertyPostTopic = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/post";
     gPropertyPostReplyTopic = gPropertyPostTopic + "/reply";
-    gPropertySetTopic       = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/set";
-    gPropertySetReplyTopic  = gPropertySetTopic + "_reply"; // 设备回复平台下发的属性设置命令
+    gPropertySetTopic = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/set";
+    gPropertySetReplyTopic = gPropertySetTopic + "_reply"; // 设备回复平台下发的属性设置命令
 
     gMqttClient.setServer(gConfig.host, gConfig.port);
     gMqttClient.setCallback(mqttCallback);
-    // 现在上报 11 个属性（含 overflow_threshold_g、ai_conf_threshold），适当扩容缓冲区。
+    // 属性数量较多，适当增大发送缓冲区。
     gMqttClient.setBufferSize(768);
-    // 弱网/离线时缩短单次阻塞，避免长时间卡住 loop（秒；与 tryConnect 3s 节流配合）
-    // 优化：5秒→3秒，局域网/云端MQTT环境下3秒超时充足
+    // 缩短 socket 超时，避免网络异常时长时间阻塞 loop。
     gMqttClient.setSocketTimeout(3);
 
     gInited = true;
@@ -257,7 +257,7 @@ bool oneNetMqttUploadProperties(
 
     String msgId = buildMessageId();
 
-    // 百分比是 float，需要先转成字符串再拼进 JSON。
+    // 浮点值先转成字符串，避免 JSON 拼接时格式不稳定。
     char phonePct[10], mousePct[10], batteryPct[10];
     dtostrf(phone.percent, 1, 2, phonePct);
     dtostrf(mouse.percent, 1, 2, mousePct);
@@ -265,7 +265,7 @@ bool oneNetMqttUploadProperties(
     char aiConfStr[16];
     dtostrf(aiConfThreshold, 1, 4, aiConfStr);
 
-    // OneJSON 属性上报载荷：三仓属性（重量/百分比/即将满载/满溢）+ 满载阈值 + AI 置信度阈值，共 14 个属性。
+    // 按 OneJSON 格式组织属性上报载荷。
     char payload[840];
     snprintf(payload, sizeof(payload),
              "{\"id\":\"%s\",\"version\":\"1.0\",\"params\":{"
