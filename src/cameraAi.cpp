@@ -16,6 +16,12 @@ namespace // 匿名命名空间，限制内部工具函数作用域
     static constexpr uint32_t CAM_STATUS_REPORT_INTERVAL_MS = 5000; // 状态报告周期
     static uint32_t s_lastStatusReportMs = 0;                       // 上次状态报告时间
 
+    bool isPrintableProtocolChar(char c) // 仅保留协议可能使用到的 ASCII 可打印字符
+    {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        return uc >= 0x20 && uc <= 0x7E;
+    }
+
     void trimLabelInPlace(char *s)        // 去掉字符串尾部空白
     {                                     // 函数体开始
         if (s == nullptr || s[0] == '\0') // 空指针或空字符串直接返回
@@ -102,18 +108,25 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             return;                                    // 直接结束
         } // 结束摄像头离线判断
 
-        const bool aiTimedOut =                                                                 // 判断 AI 是否长时间无结果
-            (g_lastAiSuccessMs == 0 || (now - g_lastAiSuccessMs) > AI_OFFLINE_TIMEOUT_MS);      // 超时条件
-        if (g_aiOfflineReported || aiTimedOut)                                                  // 已主动报离线或已超时
+        const bool aiFrameTimedOut =                                                           // 仅用于诊断，不直接判定后端离线
+            (g_lastAiSuccessMs == 0 || (now - g_lastAiSuccessMs) > AI_OFFLINE_TIMEOUT_MS);    // 超时条件
+        if (g_aiOfflineReported)                                                               // 仅当 CAM 显式上报后端离线时，才显示 AI_OFFLINE
         {                                                                                       // if 开始
             if (CAM_DEBUG_VERBOSE)                                                              // 需要打印 AI 离线原因
             {                                                                                   // if 开始
                 Serial.printf("[CAM-DBG] -> AI_OFFLINE: aiOfflineReported=%d, aiTimedOut=%d\n", // 打印 AI 离线原因
-                              g_aiOfflineReported ? 1 : 0, aiTimedOut ? 1 : 0);                 // 输出状态值
+                              g_aiOfflineReported ? 1 : 0, aiFrameTimedOut ? 1 : 0);            // 输出状态值
             } // 结束调试输出
             setAiError(true, now, AI_ERR_SERVICE_OFFLINE); // 标记服务离线
             return;                                        // 直接结束
         } // 结束 AI 离线判断
+
+        if (CAM_DEBUG_VERBOSE && aiFrameTimedOut) // AI 帧陈旧但未收到显式离线帧，仅输出诊断，不误报离线
+        {
+            Serial.printf("[CAM-DBG] AI frame stale: lastAiSuccess=%lu, diff=%lu ms, keep service state normal\n",
+                          g_lastAiSuccessMs,
+                          g_lastAiSuccessMs > 0 ? (now - g_lastAiSuccessMs) : 0);
+        }
 
         setAiError(false, now); // 恢复正常状态
     } // 结束状态检查函数
@@ -139,17 +152,9 @@ namespace // 匿名命名空间，限制内部工具函数作用域
         uint32_t now = millis();    // 获取当前时间
         g_lastCamHeartbeatMs = now; // 更新摄像头心跳时间
 
-        if (strcmp(line, "READY") == 0)                                                  // 摄像头上报 READY
-        {                                                                                // if 开始
-            g_camReady = true;                                                           // 标记摄像头已就绪
-            if (CAM_DEBUG_VERBOSE)                                                       // 需要打印调试信息
-            {                                                                            // if 开始
-                Serial.printf("[CAM-DBG] READY -> camReady=true, heartbeat=%lu\n", now); // 打印就绪状态
-            } // 结束调试输出
-            return; // 结束 READY 处理
-        } // 结束 READY 判断
+        const char *detFrame = strstr(line, "DET,"); // 容忍行首混入少量脏字节
 
-        if (strcmp(line, "NO_WIFI") == 0)                                                   // 摄像头上报无 WiFi
+        if (strstr(line, "NO_WIFI") != nullptr)                                              // 摄像头上报无 WiFi
         {                                                                                   // if 开始
             g_camReady = false;                                                             // 标记摄像头未就绪
             if (CAM_DEBUG_VERBOSE)                                                          // 需要打印调试信息
@@ -159,9 +164,9 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             return; // 结束 NO_WIFI 处理
         } // 结束 NO_WIFI 判断
 
-        if (strncmp(line, "DET,", 4) == 0)             // 摄像头上报识别结果
+        if (detFrame != nullptr)                         // 摄像头上报识别结果
         {                                              // if 开始
-            const char *payload = line + 4;            // 跳过 DET, 前缀
+            const char *payload = detFrame + 4;        // 跳过 DET, 前缀
             const char *split = strrchr(payload, ','); // 找到最后一个逗号，分隔标签和置信度
             if (!split || split == payload)            // 格式不合法
             {                                          // if 开始
@@ -188,7 +193,7 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             return;                                                                  // 结束 DET 处理
         } // 结束 DET 判断
 
-        if (strcmp(line, "NONE") == 0)       // 摄像头上报未识别到目标
+        if (strstr(line, "NONE") != nullptr) // 摄像头上报未识别到目标
         {                                    // if 开始
             g_camReady = true;               // 摄像头保持就绪
             clearAiOfflineFlag();            // 清除离线标记
@@ -199,14 +204,26 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             return;                          // 结束 NONE 处理
         } // 结束 NONE 判断
 
-        if (strcmp(line, "AI_OFFLINE") == 0)               // 摄像头上报 AI 服务离线
+        if (strstr(line, "AI_OFFLINE") != nullptr)         // 摄像头上报 AI 服务离线
         {                                                  // if 开始
             g_camReady = true;                             // 摄像头本体仍可通信
             g_aiOfflineReported = true;                    // 记录 AI 离线标记
+            g_lastAiSuccessMs = now;                       // 记录本次协议帧时间，便于链路诊断
             setAiState(false, "none", 0.0f);               // 清空当前识别结果
             setAiError(true, now, AI_ERR_SERVICE_OFFLINE); // 标记服务离线
             Serial.println("[CAM] AI OFFLINE");            // 打印 AI 离线提示
+            return;                                        // 结束 AI_OFFLINE 处理
         } // 结束 AI_OFFLINE 判断
+
+        if (strstr(line, "READY") != nullptr)                                            // 摄像头上报 READY
+        {                                                                                // if 开始
+            g_camReady = true;                                                           // 标记摄像头已就绪
+            if (CAM_DEBUG_VERBOSE)                                                       // 需要打印调试信息
+            {                                                                            // if 开始
+                Serial.printf("[CAM-DBG] READY -> camReady=true, heartbeat=%lu\n", now); // 打印就绪状态
+            } // 结束调试输出
+            return; // 结束 READY 处理
+        } // 结束 READY 判断
     } // 结束 parseCameraLine
 } // 结束匿名命名空间
 
@@ -219,6 +236,7 @@ void pollCameraUart()                         // 轮询摄像头串口
 {                                             // 函数体开始
     static uint32_t s_totalBytesReceived = 0; // 累计接收字节数
     static uint32_t s_lastByteReportMs = 0;   // 上次统计输出时间
+    static bool s_discardCurrentLine = false; // 缓冲区溢出后，整行丢弃直到下一个换行
 
     while (CameraUart.available())                           // 只要串口还有数据就继续读
     {                                                        // while 开始
@@ -232,11 +250,25 @@ void pollCameraUart()                         // 轮询摄像头串口
 
         if (c == '\n')                         // 遇到换行，说明一行数据结束
         {                                      // if 开始
-            g_camLineBuf[g_camLinePos] = '\0'; // 给当前缓冲区补结束符
-            parseCameraLine(g_camLineBuf);     // 解析完整的一行
+            if (!s_discardCurrentLine)         // 仅在本行未标记为丢弃时解析
+            {
+                g_camLineBuf[g_camLinePos] = '\0'; // 给当前缓冲区补结束符
+                parseCameraLine(g_camLineBuf);     // 解析完整的一行
+            }
             g_camLinePos = 0;                  // 重置写入位置
+            s_discardCurrentLine = false;      // 开启下一行接收
             continue;                          // 开始接收下一行
         } // 结束换行处理
+
+        if (s_discardCurrentLine) // 当前行已经判定损坏，忽略直到换行
+        {
+            continue;
+        }
+
+        if (!isPrintableProtocolChar(c)) // 过滤非 ASCII 噪声，避免污染协议帧
+        {
+            continue;
+        }
 
         if (g_camLinePos < sizeof(g_camLineBuf) - 1) // 缓冲区还有空间
         {                                            // if 开始
@@ -249,7 +281,8 @@ void pollCameraUart()                         // 轮询摄像头串口
             {                                                                              // if 开始
                 Serial.println("[CAM-DBG] WARN: line buffer overflow, drop current line"); // 打印溢出警告
             } // 结束调试输出
-            g_camLinePos = 0; // 丢弃当前行并重新开始
+            g_camLinePos = 0;         // 清空当前缓冲
+            s_discardCurrentLine = true; // 丢弃本行剩余内容，直到下一个换行
         } // 结束溢出处理
     } // 结束串口读取循环
 

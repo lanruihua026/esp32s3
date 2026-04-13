@@ -30,6 +30,8 @@ static const float ZERO_DEADBAND_G2 = 2.0f;
 static const float DIRECTION_LOCK_RAW_THRESHOLD2 = 30000.0f;
 // 去皮时要求的最小有效样本数（共采 15 帧）
 static const int TARE_MIN_VALID_SAMPLES2 = 8;
+// 启动自动回零阈值：用于恢复历史零点后判断当前是否仍可视为空仓。
+static const float BOOT_REZERO_THRESHOLD_G2 = 150.0f;
 
 // 前向声明，仅在本文件内部使用
 static int32_t readRawData2();
@@ -131,9 +133,11 @@ bool initHx711Channel2(Preferences &prefs, bool prefsOk, float defaultScale, flo
         float savedOffset = prefs.getFloat("hx2_zero", 0.0f);
         setZeroOffset2(savedOffset);
         float loadMagnitude = getLoadMagnitude2();
-        Serial.printf("[HX711] CH2: restored zero_offset=%.1f, load_abs=%.1fg\n", savedOffset, loadMagnitude);
+        const float rezeroThreshold = fmaxf(bootEmptyThreshold, BOOT_REZERO_THRESHOLD_G2);
+        Serial.printf("[HX711] CH2: restored zero_offset=%.1f, load_abs=%.1fg, rezero_threshold=%.1fg\n",
+                      savedOffset, loadMagnitude, rezeroThreshold);
 
-        if (loadMagnitude >= 0.0f && loadMagnitude < bootEmptyThreshold)
+        if (loadMagnitude >= 0.0f && loadMagnitude < rezeroThreshold)
         {
             if (tareScale2())
             {
@@ -152,7 +156,7 @@ bool initHx711Channel2(Preferences &prefs, bool prefsOk, float defaultScale, flo
         else
         {
             Serial.printf("[HX711] CH2: bin has load (%.1fg >= %.1fg), keeping restored offset\n",
-                          loadMagnitude, bootEmptyThreshold);
+                          loadMagnitude, rezeroThreshold);
         }
     }
     else
@@ -285,15 +289,22 @@ float getWeight2()
     float netValue = rawValue - zero_offset2;  // 减去零点偏移，得到净原始值
 
     // 自动识别受力方向并锁定：
-    // 若受力后净值绝对值足够大且方向为负，后续统一乘 -1，让重量保持正向增长。
+    // 未锁定前先按当前净值方向临时换算，避免轻载时因为方向尚未锁定而显示为 0。
+    // 幅度足够大后再正式锁定方向，减少漂移造成的误锁。
+    int8_t appliedDirection = scale_direction2;
     if (!direction_locked2 && fabsf(netValue) > DIRECTION_LOCK_RAW_THRESHOLD2)
     {
         scale_direction2 = (netValue >= 0.0f) ? 1 : -1;
         direction_locked2 = true;
+        appliedDirection = scale_direction2;
+    }
+    else if (!direction_locked2)
+    {
+        appliedDirection = (netValue >= 0.0f) ? 1 : -1;
     }
 
     // 净原始值乘方向系数后除以校准因子，得到克重
-    float weight = (netValue * scale_direction2) / calibration_factor2;
+    float weight = (netValue * appliedDirection) / calibration_factor2;
 
     // 小抖动直接压到 0，提升静止显示稳定性
     if (fabsf(weight) < ZERO_DEADBAND_G2)
