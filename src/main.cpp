@@ -12,7 +12,7 @@
 void setup() // 系统上电初始化入口
 {
     Serial.begin(115200);
-    g_prefsOk = gPrefs.begin("sysconf", false); // 打开 NVS 配置区，false 表示只读
+    g_prefsOk = gPrefs.begin("sysconf", false); // 打开 NVS 配置区，false 表示读写模式
 
     if (g_prefsOk) // NVS 可用时读取保存的配置
     {

@@ -29,6 +29,24 @@ namespace // 匿名命名空间，限制内部工具函数作用域
         } // 结束尾部空白清理
     } // 结束 trimLabelInPlace
 
+    bool isProtocolLabelSafe(const char *label) // 校验 DET 标签是否会破坏逗号分隔协议
+    {
+        if (label == nullptr || label[0] == '\0')
+        {
+            return false;
+        }
+
+        for (const char *p = label; *p != '\0'; ++p)
+        {
+            if (*p == ',' || !isPrintableProtocolChar(*p))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     bool labelEqualsCi(const char *a, const char *b) // 忽略大小写比较两个标签
     {                                                // 函数体开始
         if (a == nullptr || b == nullptr)            // 任一指针为空就认为不相等
@@ -100,24 +118,22 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             ++line;                           // 指针后移
         } // 结束行首空白处理
 
-        uint32_t now = millis();    // 获取当前时间
-        g_lastCamHeartbeatMs = now; // 更新摄像头心跳时间
+        uint32_t now = millis(); // 获取当前时间
 
-        const char *detFrame = strstr(line, "DET,"); // 容忍行首混入少量脏字节
-
-        if (strstr(line, "NO_WIFI") != nullptr)                                              // 摄像头上报无 WiFi
-        {                                                                                   // if 开始
-            g_camReady = false;                                                             // 标记摄像头未就绪
+        if (strcmp(line, "NO_WIFI") == 0) // 摄像头上报无 WiFi
+        {                                 // if 开始
+            g_lastCamHeartbeatMs = now;   // 记录有效协议帧时间
+            g_camReady = false;           // 标记摄像头未就绪
             return; // 结束 NO_WIFI 处理
         } // 结束 NO_WIFI 判断
 
-        if (detFrame != nullptr)                         // 摄像头上报识别结果
-        {                                              // if 开始
-            const char *payload = detFrame + 4;        // 跳过 DET, 前缀
-            const char *split = strrchr(payload, ','); // 找到最后一个逗号，分隔标签和置信度
-            if (!split || split == payload)            // 格式不合法
-            {                                          // if 开始
-                return;                                // 直接丢弃
+        if (strncmp(line, "DET,", 4) == 0)        // 摄像头上报识别结果
+        {                                         // if 开始
+            const char *payload = line + 4;       // 跳过 DET, 前缀
+            const char *split = strchr(payload, ','); // 找到标签后的第一个逗号
+            if (!split || split == payload || strchr(split + 1, ',') != nullptr) // 格式不合法
+            {                                                                 // if 开始
+                return;                                                       // 直接丢弃
             } // 结束格式判断
 
             char label[sizeof(g_lastAiLabel)] = {0};                // 临时标签缓冲区
@@ -129,8 +145,13 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             memcpy(label, payload, labelLen); // 复制标签内容
             label[labelLen] = '\0';           // 手动补字符串结束符
             trimLabelInPlace(label);          // 去掉标签尾部空白
+            if (!isProtocolLabelSafe(label))  // 标签不安全时丢弃整帧
+            {
+                return;
+            }
 
             float conf = static_cast<float>(atof(split + 1));                        // 解析置信度值
+            g_lastCamHeartbeatMs = now;                                               // 记录有效协议帧时间
             g_camReady = true;                                                       // 摄像头仍然视为就绪
             clearAiOfflineFlag();                                                    // 清除离线标记
             setAiState(true, label, conf);                                           // 更新 AI 检测状态
@@ -139,9 +160,10 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             return;                                                                  // 结束 DET 处理
         } // 结束 DET 判断
 
-        if (strstr(line, "NONE") != nullptr) // 摄像头上报未识别到目标
-        {                                    // if 开始
-            g_camReady = true;               // 摄像头保持就绪
+        if (strcmp(line, "NONE") == 0) // 摄像头上报未识别到目标
+        {                              // if 开始
+            g_lastCamHeartbeatMs = now; // 记录有效协议帧时间
+            g_camReady = true;         // 摄像头保持就绪
             clearAiOfflineFlag();            // 清除离线标记
             setAiState(false, "none", 0.0f); // 更新为未检测到目标
             setAiError(false, now);          // 清除错误状态
@@ -149,8 +171,9 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             return;                          // 结束 NONE 处理
         } // 结束 NONE 判断
 
-        if (strstr(line, "AI_OFFLINE") != nullptr)         // 摄像头上报 AI 服务离线
+        if (strcmp(line, "AI_OFFLINE") == 0)               // 摄像头上报 AI 服务离线
         {                                                  // if 开始
+            g_lastCamHeartbeatMs = now;                    // 记录有效协议帧时间
             g_camReady = true;                             // 摄像头本体仍可通信
             g_aiOfflineReported = true;                    // 记录 AI 离线标记
             g_lastAiSuccessMs = now;                       // 记录本次协议帧时间，便于链路诊断
@@ -159,9 +182,10 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             return;                                        // 结束 AI_OFFLINE 处理
         } // 结束 AI_OFFLINE 判断
 
-        if (strstr(line, "READY") != nullptr)                                            // 摄像头上报 READY
-        {                                                                                // if 开始
-            g_camReady = true;                                                           // 标记摄像头已就绪
+        if (strcmp(line, "READY") == 0) // 摄像头上报 READY
+        {                               // if 开始
+            g_lastCamHeartbeatMs = now; // 记录有效协议帧时间
+            g_camReady = true;          // 标记摄像头已就绪
             return; // 结束 READY 处理
         } // 结束 READY 判断
     } // 结束 parseCameraLine
