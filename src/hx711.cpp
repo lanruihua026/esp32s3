@@ -106,11 +106,7 @@ bool initHx711Channel1(Preferences &prefs, bool prefsOk, float defaultScale, flo
     if (!prefsOk)
     {
         setCalibrationFactor(defaultScale);
-        Serial.printf("[HX711] CH1: NVS unavailable, default calibration_factor=%.2f\n", defaultScale);
-        if (tareScale())
-        {
-            Serial.println("[HX711] CH1: tare OK, offset not persisted");
-        }
+        tareScale();
         return true;
     }
 
@@ -118,13 +114,11 @@ bool initHx711Channel1(Preferences &prefs, bool prefsOk, float defaultScale, flo
     {
         float saved = prefs.getFloat("hx1_scale", defaultScale);
         setCalibrationFactor(saved);
-        Serial.printf("[HX711] CH1: loaded calibration_factor=%.2f from NVS\n", saved);
     }
     else
     {
         setCalibrationFactor(defaultScale);
         prefs.putFloat("hx1_scale", defaultScale);
-        Serial.printf("[HX711] CH1: using default calibration_factor=%.2f, saved to NVS\n", defaultScale);
     }
 
     if (prefs.isKey("hx1_zero"))
@@ -133,42 +127,20 @@ bool initHx711Channel1(Preferences &prefs, bool prefsOk, float defaultScale, flo
         setZeroOffset(savedOffset);
         float loadMagnitude = getLoadMagnitude();
         const float rezeroThreshold = fmaxf(bootEmptyThreshold, CH1_BOOT_REZERO_THRESHOLD_G);
-        Serial.printf("[HX711] CH1: restored zero_offset=%.1f, load_abs=%.1fg, rezero_threshold=%.1fg\n",
-                      savedOffset, loadMagnitude, rezeroThreshold);
 
         if (loadMagnitude >= 0.0f && loadMagnitude < rezeroThreshold)
         {
             if (tareScale())
             {
                 prefs.putFloat("hx1_zero", getZeroOffset());
-                Serial.printf("[HX711] CH1: near-empty, re-tared and saved zero_offset=%.1f\n", getZeroOffset());
             }
-            else
-            {
-                Serial.println("[HX711] CH1: near-empty but tare failed, keeping restored offset");
-            }
-        }
-        else if (loadMagnitude < 0.0f)
-        {
-            Serial.println("[HX711] CH1: load probe invalid, keeping restored offset");
-        }
-        else
-        {
-            Serial.printf("[HX711] CH1: bin has load (%.1fg >= %.1fg), keeping restored offset\n",
-                          loadMagnitude, rezeroThreshold);
         }
     }
     else
     {
-        Serial.println("[HX711] CH1: no saved zero offset, first boot tare");
         if (tareScale())
         {
             prefs.putFloat("hx1_zero", getZeroOffset());
-            Serial.printf("[HX711] CH1: first-boot tare done, saved zero_offset=%.1f\n", getZeroOffset());
-        }
-        else
-        {
-            Serial.println("[HX711] CH1: first-boot tare failed, zero offset unchanged");
         }
     }
 
@@ -448,7 +420,7 @@ float getCalibrationFactor()
     return calibration_factor;
 }
 
-static bool handleHx711Command1(const char *cmd, Preferences &prefs, bool prefsOk, int32_t currentWeight)
+static bool handleHx711Command1(const char *cmd, Preferences &prefs, bool prefsOk, int32_t)
 {
     static bool s_calReadyCh1 = false;
 
@@ -459,7 +431,6 @@ static bool handleHx711Command1(const char *cmd, Preferences &prefs, bool prefsO
 
     if (strcmp(cmd, "TARE1") == 0)
     {
-        Serial.println("[CAL] TARE1: taring CH1...");
         s_calReadyCh1 = false;
         if (tareScale())
         {
@@ -468,13 +439,6 @@ static bool handleHx711Command1(const char *cmd, Preferences &prefs, bool prefsO
                 prefs.putFloat("hx1_zero", getZeroOffset());
             }
             s_calReadyCh1 = true;
-            Serial.printf(prefsOk ? "[CAL] TARE1 OK: zero_offset=%.1f saved\n"
-                                  : "[CAL] TARE1 OK: zero_offset=%.1f (NVS unavailable, not saved)\n",
-                          getZeroOffset());
-        }
-        else
-        {
-            Serial.println("[CAL] TARE1 FAIL: insufficient valid samples");
         }
         return true;
     }
@@ -484,15 +448,12 @@ static bool handleHx711Command1(const char *cmd, Preferences &prefs, bool prefsO
         float w = atof(cmd + 5);
         if (w <= 0.0f)
         {
-            Serial.println("[CAL] CAL1 FAIL: invalid weight");
             return true;
         }
         if (!s_calReadyCh1)
         {
-            Serial.println("[CAL] CAL1 FAIL: run TARE1 first in current session");
             return true;
         }
-        Serial.printf("[CAL] CAL1: calibrating CH1 with %.1fg...\n", w);
         if (calibrateScale(w))
         {
             if (prefsOk)
@@ -500,21 +461,12 @@ static bool handleHx711Command1(const char *cmd, Preferences &prefs, bool prefsO
                 prefs.putFloat("hx1_scale", getCalibrationFactor());
             }
             s_calReadyCh1 = false;
-            Serial.printf(prefsOk ? "[CAL] CAL1 OK: factor=%.2f saved to NVS\n"
-                                  : "[CAL] CAL1 OK: factor=%.2f (NVS unavailable, not saved)\n",
-                          getCalibrationFactor());
-        }
-        else
-        {
-            Serial.println("[CAL] CAL1 FAIL: calibration rejected (sensor not ready or samples invalid)");
         }
         return true;
     }
 
     if (strcmp(cmd, "STATUS") == 0)
     {
-        Serial.printf("[CAL] CH1: factor=%.2f  zero=%.1f  weight=%ldg\n",
-                      getCalibrationFactor(), getZeroOffset(), static_cast<long>(currentWeight));
         return true;
     }
 
@@ -548,7 +500,6 @@ void pollHx711SerialCommands(Preferences &prefs, bool prefsOk, int32_t currentWe
             {
                 if (strcmp(s_serialCmdBuf, "STATUS") == 0)
                 {
-                    Serial.println("[CAL] === HX711 Status ===");
                     handleHx711Command1("STATUS", prefs, prefsOk, currentWeight1);
                     handleHx711Command2("STATUS", prefs, prefsOk, currentWeight2);
                     handleHx711Command3("STATUS", prefs, prefsOk, currentWeight3);
@@ -559,11 +510,7 @@ void pollHx711SerialCommands(Preferences &prefs, bool prefsOk, int32_t currentWe
                                          handleHx711Command2(s_serialCmdBuf, prefs, prefsOk, currentWeight2) ||
                                          handleHx711Command3(s_serialCmdBuf, prefs, prefsOk, currentWeight3);
 
-                    if (!handled)
-                    {
-                        Serial.printf("[CAL] Unknown command: %s\n", s_serialCmdBuf);
-                        Serial.println("[CAL] Commands: TARE1/2/3  CAL1:<g>/CAL2:<g>/CAL3:<g>  STATUS");
-                    }
+                    (void)handled;
                 }
             }
             s_serialCmdPos = 0;

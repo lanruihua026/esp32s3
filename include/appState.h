@@ -4,25 +4,28 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-static constexpr uint8_t WARNING_LIGHT_PIN = 6;               // 警示灯
-static constexpr uint8_t RGB_LED_PIN = 38;                    // 板载rgb
-static constexpr uint8_t RGB_LED_COUNT = 1;                   // 板载rgb一颗
-static constexpr uint8_t CAM_UART_RX_PIN = 18;                // 板载串口接收来自esp32cam的模型识别结果
-static constexpr uint8_t CAM_UART_TX_PIN = 17;                // 暂时用不到
-static constexpr uint32_t CAM_UART_BAUD = 115200;             // 板载串口波特率
+static constexpr uint8_t WARNING_LIGHT_PIN = 6; // 警示灯
+static constexpr uint8_t RGB_LED_PIN = 38;      // 板载RGB引脚
+static constexpr uint8_t RGB_LED_COUNT = 1;     // 板载RGB灯珠数量为1
+static constexpr uint8_t CAM_UART_RX_PIN = 18;  // 接收来自esp32cam的模型识别结果
+static constexpr uint8_t CAM_UART_TX_PIN = 17;  // 预留
+static constexpr uint32_t CAM_UART_BAUD = 115200;
 static constexpr int32_t WARNING_RELEASE_HYSTERESIS_G = 100;  // 超重后恢复正常的重量差阈值，单位克。例如超重1000g，只有当重量降到900g以下才认为恢复正常，避免因重量波动导致警示灯频闪
 static constexpr uint32_t WEIGHT_SAMPLE_INTERVAL_MS = 250;    // 称重采集间隔
 static constexpr uint32_t PROPERTY_REPORT_INTERVAL_MS = 3000; // 属性上报间隔
-static constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;     // WiFi重试间隔
+static constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;     // WiFi重新连接间隔
 static constexpr uint32_t WIFI_BOOT_WAIT_MS = 5000;           // WiFi启动等待时间
 static constexpr uint32_t CAM_HEARTBEAT_TIMEOUT_MS = 3000;    // 相机心跳超时时间
-static constexpr uint32_t AI_OFFLINE_TIMEOUT_MS = 5000;       // AI结果帧陈旧诊断时间；仅用于诊断链路停滞，不再单独判定后端离线
-static constexpr float HX711_CAL_FACTOR_1 = 452.3f;           // HX711校准系数
-static constexpr float HX711_CAL_FACTOR_2 = 454.5f;           // HX711校准系数
-static constexpr float HX711_CAL_FACTOR_3 = 415.6f;           // HX711校准系数
-static constexpr float HX711_BOOT_EMPTY_THRESHOLD_G = 50.0f;  // HX711启动时的空载重量阈值，单位克。启动时如果称重读数超过这个值，认为秤盘上有物品，提示用户清空秤盘后重启设备
-static constexpr uint32_t OLED_MIN_UPDATE_INTERVAL_MS = 50;   // OLED最小更新间隔，单位毫秒。OLED刷新较慢，过快的更新可能导致显示异常或闪烁，这个参数可以限制OLED的刷新频率
-static constexpr int32_t HX711_MAX_RANGE_G = 5000;            // 单路压力传感器标称量程上限，单位克。超过此值视为超量程异常，不作为正常重量处理
+static constexpr uint32_t AI_OFFLINE_TIMEOUT_MS = 5000;       // AI离线超时时间，例如如果超过这个时间没有收到有效的AI协议帧，就认为AI离线了
+
+// HX711相关的校准参数和阈值
+static constexpr float HX711_CAL_FACTOR_1 = 452.3f;
+static constexpr float HX711_CAL_FACTOR_2 = 454.5f;
+static constexpr float HX711_CAL_FACTOR_3 = 415.6f;
+static constexpr float HX711_BOOT_EMPTY_THRESHOLD_G = 50.0f; // HX711启动时的空载重量阈值，单位克。启动时如果称重读数超过这个值，认为秤盘上有物品，提示用户清空秤盘后重启设备
+
+static constexpr uint32_t OLED_MIN_UPDATE_INTERVAL_MS = 50; // OLED最小更新间隔，单位毫秒。OLED刷新较慢，过快的更新可能导致显示异常或闪烁，这个参数可以限制OLED的刷新频率
+static constexpr int32_t HX711_MAX_RANGE_G = 5000;          // 单路压力传感器标称量程上限，单位克。超过此值视为超量程异常，不作为正常重量处理
 
 extern int32_t g_fullWeightG;   // 全局变量，满载重量阈值，单位克。这个值可以通过NVS（非易失性存储）配置，如果NVS不可用则使用默认值1000g
 extern float g_aiConfThreshold; // 全局变量，AI识别置信度阈值。这个值可以通过NVS配置，如果NVS不可用则使用默认值0.0f，表示不启用置信度过滤

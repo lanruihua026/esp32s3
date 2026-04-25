@@ -34,12 +34,10 @@ namespace
         char buf[512] = {0};
         unsigned int copyLen = (len < sizeof(buf) - 1) ? len : sizeof(buf) - 1;
         memcpy(buf, payload, copyLen);
-        Serial.printf("[CONFIG] property/set rx len=%u payload=%s\n", len, buf);
 
         JsonDocument doc;
         if (deserializeJson(doc, buf) != DeserializationError::Ok)
         {
-            Serial.println("[CONFIG] property/set JSON parse error");
             return;
         }
 
@@ -54,11 +52,7 @@ namespace
                 vOver = pOver;
             }
             int32_t newThreshold = vOver.as<int32_t>();
-            if (newThreshold < 100 || newThreshold > 5000)
-            {
-                Serial.printf("[CONFIG] overflow_threshold_g=%d out of range [100,5000], ignored\n", newThreshold);
-            }
-            else
+            if (newThreshold >= 100 && newThreshold <= 5000)
             {
                 g_fullWeightG = newThreshold;
                 if (g_prefsOk)
@@ -66,7 +60,6 @@ namespace
                     gPrefs.putInt("full_w", newThreshold);
                 }
                 setFullWeight(g_fullWeightG);
-                Serial.printf("[CONFIG] overflow_threshold_g updated to %d g\n", newThreshold);
                 changed = true;
             }
         }
@@ -80,18 +73,13 @@ namespace
                 vAi = pAi;
             }
             float newAi = vAi.as<float>();
-            if (newAi < 0.0f || newAi > 1.0f)
-            {
-                Serial.printf("[CONFIG] ai_conf_threshold=%.4f out of range [0,1], ignored\n", newAi);
-            }
-            else
+            if (newAi >= 0.0f && newAi <= 1.0f)
             {
                 g_aiConfThreshold = newAi;
                 if (g_prefsOk)
                 {
                     gPrefs.putFloat("ai_conf", newAi);
                 }
-                Serial.printf("[CONFIG] ai_conf_threshold updated to %.4f\n", newAi);
                 changed = true;
             }
         }
@@ -100,7 +88,6 @@ namespace
         {
             // MQTT 回调内只标记“需要补上报”，由主循环异步发送，避免在回调栈内嵌套 publish。
             g_propertyReportPending = true;
-            Serial.println("[CONFIG] property/set applied; schedule report");
         }
     }
 }
@@ -135,7 +122,6 @@ void processDeferredPropertyReport()
     }
 
     g_propertyReportPending = false;
-    Serial.println("[CONFIG] report deferred properties now");
     reportPropertiesNow();
 }
 
@@ -155,9 +141,6 @@ void initBoardIndicators()
 void initCameraUart()
 {
     CameraUart.begin(CAM_UART_BAUD, SERIAL_8N1, CAM_UART_RX_PIN, CAM_UART_TX_PIN);
-    Serial.printf("[CAM-UART] INIT: RX=GPIO%d, TX=GPIO%d, baud=%lu\n",
-                  CAM_UART_RX_PIN, CAM_UART_TX_PIN, CAM_UART_BAUD);
-    Serial.println("[CAM-UART] waiting for ESP32-CAM heartbeat...");
 }
 
 void initOledModule()
@@ -296,5 +279,4 @@ void tryReconnectWiFi(uint32_t now)
     g_lastWiFiRetryMs = now;
     WiFi.disconnect(false, false);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.println("[WiFi] manual retry (layer-2 reconnect)");
 }

@@ -97,17 +97,12 @@ namespace
                 strncpy(msgId, parsedId, sizeof(msgId) - 1);
                 msgId[sizeof(msgId) - 1] = '\0';
             }
-            else
-            {
-                Serial.printf("[OneNET] SET_REPLY id parse err: %s\n", err.c_str());
-            }
         }
 
         char replyBuf[96];
         snprintf(replyBuf, sizeof(replyBuf),
                  "{\"id\":\"%s\",\"code\":200,\"msg\":\"success\"}", msgId);
-        bool sent = gMqttClient.publish(gPropertySetReplyTopic.c_str(), replyBuf, false);
-        Serial.printf("[OneNET] SET_REPLY id=%s sent=%d\n", msgId, sent ? 1 : 0);
+        gMqttClient.publish(gPropertySetReplyTopic.c_str(), replyBuf, false);
 
         // 回执发出后再执行业务逻辑，避免 NVS 写入/属性补上报拖慢平台 ACK。
         if (gPropertySetCb != nullptr)
@@ -149,25 +144,19 @@ namespace
 
         if (token.isEmpty())
         {
-            Serial.println("[OneNET] TOKEN FAIL");
             return;
         }
 
         bool ok = gMqttClient.connect(gConfig.deviceName, gConfig.productId, token.c_str());
         if (!ok)
         {
-            Serial.printf("[OneNET] MQTT FAIL rc=%d\n", gMqttClient.state());
             return;
         }
 
-        Serial.println("[OneNET] MQTT OK");
-
         // 连接成功后订阅平台应答和属性下发主题。
         // QoS 1：保证至少收到一次，防止平台下发指令因网络抖动丢失。
-        bool subReply = gMqttClient.subscribe(gPropertyPostReplyTopic.c_str(), 1);
-        bool subSet = gMqttClient.subscribe(gPropertySetTopic.c_str(), 1);
-        Serial.printf("[OneNET] SUB post/reply=%d  property/set=%d\n",
-                      subReply ? 1 : 0, subSet ? 1 : 0);
+        gMqttClient.subscribe(gPropertyPostReplyTopic.c_str(), 1);
+        gMqttClient.subscribe(gPropertySetTopic.c_str(), 1);
     }
 }
 
@@ -291,9 +280,7 @@ bool oneNetMqttUploadProperties(
              overflowThresholdG,
              aiConfStr);
 
-    bool ok = gMqttClient.publish(gPropertyPostTopic.c_str(), payload, false);
-    Serial.println(ok ? "[OneNET] POST OK" : "[OneNET] POST FAIL");
-    return ok;
+    return gMqttClient.publish(gPropertyPostTopic.c_str(), payload, false);
 }
 
 /**
@@ -316,6 +303,5 @@ void oneNetMqttDisconnect()
     if (gMqttClient.connected())
     {
         gMqttClient.disconnect();
-        Serial.println("[OneNET] MQTT disconnect (WiFi lost)");
     }
 }

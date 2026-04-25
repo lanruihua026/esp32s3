@@ -107,11 +107,7 @@ bool initHx711Channel3(Preferences &prefs, bool prefsOk, float defaultScale, flo
     if (!prefsOk)
     {
         setCalibrationFactor3(defaultScale);
-        Serial.printf("[HX711] CH3: NVS unavailable, default calibration_factor=%.2f\n", defaultScale);
-        if (tareScale3())
-        {
-            Serial.println("[HX711] CH3: tare OK, offset not persisted");
-        }
+        tareScale3();
         return true;
     }
 
@@ -119,13 +115,11 @@ bool initHx711Channel3(Preferences &prefs, bool prefsOk, float defaultScale, flo
     {
         float saved = prefs.getFloat("hx3_scale", defaultScale);
         setCalibrationFactor3(saved);
-        Serial.printf("[HX711] CH3: loaded calibration_factor=%.2f from NVS\n", saved);
     }
     else
     {
         setCalibrationFactor3(defaultScale);
         prefs.putFloat("hx3_scale", defaultScale);
-        Serial.printf("[HX711] CH3: using default calibration_factor=%.2f, saved to NVS\n", defaultScale);
     }
 
     if (prefs.isKey("hx3_zero"))
@@ -134,42 +128,20 @@ bool initHx711Channel3(Preferences &prefs, bool prefsOk, float defaultScale, flo
         setZeroOffset3(savedOffset);
         float loadMagnitude = getLoadMagnitude3();
         const float rezeroThreshold = fmaxf(bootEmptyThreshold, BOOT_REZERO_THRESHOLD_G3);
-        Serial.printf("[HX711] CH3: restored zero_offset=%.1f, load_abs=%.1fg, rezero_threshold=%.1fg\n",
-                      savedOffset, loadMagnitude, rezeroThreshold);
 
         if (loadMagnitude >= 0.0f && loadMagnitude < rezeroThreshold)
         {
             if (tareScale3())
             {
                 prefs.putFloat("hx3_zero", getZeroOffset3());
-                Serial.printf("[HX711] CH3: near-empty, re-tared and saved zero_offset=%.1f\n", getZeroOffset3());
             }
-            else
-            {
-                Serial.println("[HX711] CH3: near-empty but tare failed, keeping restored offset");
-            }
-        }
-        else if (loadMagnitude < 0.0f)
-        {
-            Serial.println("[HX711] CH3: load probe invalid, keeping restored offset");
-        }
-        else
-        {
-            Serial.printf("[HX711] CH3: bin has load (%.1fg >= %.1fg), keeping restored offset\n",
-                          loadMagnitude, rezeroThreshold);
         }
     }
     else
     {
-        Serial.println("[HX711] CH3: no saved zero offset, first boot tare");
         if (tareScale3())
         {
             prefs.putFloat("hx3_zero", getZeroOffset3());
-            Serial.printf("[HX711] CH3: first-boot tare done, saved zero_offset=%.1f\n", getZeroOffset3());
-        }
-        else
-        {
-            Serial.println("[HX711] CH3: first-boot tare failed, zero offset unchanged");
         }
     }
 
@@ -458,7 +430,7 @@ float getCalibrationFactor3()
     return calibration_factor3;
 }
 
-bool handleHx711Command3(const char *cmd, Preferences &prefs, bool prefsOk, int32_t currentWeight)
+bool handleHx711Command3(const char *cmd, Preferences &prefs, bool prefsOk, int32_t)
 {
     static bool s_calReadyCh3 = false;
 
@@ -469,7 +441,6 @@ bool handleHx711Command3(const char *cmd, Preferences &prefs, bool prefsOk, int3
 
     if (strcmp(cmd, "TARE3") == 0)
     {
-        Serial.println("[CAL] TARE3: taring CH3...");
         s_calReadyCh3 = false;
         if (tareScale3())
         {
@@ -478,13 +449,6 @@ bool handleHx711Command3(const char *cmd, Preferences &prefs, bool prefsOk, int3
                 prefs.putFloat("hx3_zero", getZeroOffset3());
             }
             s_calReadyCh3 = true;
-            Serial.printf(prefsOk ? "[CAL] TARE3 OK: zero_offset=%.1f saved\n"
-                                  : "[CAL] TARE3 OK: zero_offset=%.1f (NVS unavailable, not saved)\n",
-                          getZeroOffset3());
-        }
-        else
-        {
-            Serial.println("[CAL] TARE3 FAIL: insufficient valid samples");
         }
         return true;
     }
@@ -494,15 +458,12 @@ bool handleHx711Command3(const char *cmd, Preferences &prefs, bool prefsOk, int3
         float w = atof(cmd + 5);
         if (w <= 0.0f)
         {
-            Serial.println("[CAL] CAL3 FAIL: invalid weight");
             return true;
         }
         if (!s_calReadyCh3)
         {
-            Serial.println("[CAL] CAL3 FAIL: run TARE3 first in current session");
             return true;
         }
-        Serial.printf("[CAL] CAL3: calibrating CH3 with %.1fg...\n", w);
         if (calibrateScale3(w))
         {
             if (prefsOk)
@@ -510,21 +471,12 @@ bool handleHx711Command3(const char *cmd, Preferences &prefs, bool prefsOk, int3
                 prefs.putFloat("hx3_scale", getCalibrationFactor3());
             }
             s_calReadyCh3 = false;
-            Serial.printf(prefsOk ? "[CAL] CAL3 OK: factor=%.2f saved to NVS\n"
-                                  : "[CAL] CAL3 OK: factor=%.2f (NVS unavailable, not saved)\n",
-                          getCalibrationFactor3());
-        }
-        else
-        {
-            Serial.println("[CAL] CAL3 FAIL: calibration rejected (sensor not ready or samples invalid)");
         }
         return true;
     }
 
     if (strcmp(cmd, "STATUS") == 0)
     {
-        Serial.printf("[CAL] CH3: factor=%.2f  zero=%.1f  weight=%ldg\n",
-                      getCalibrationFactor3(), getZeroOffset3(), static_cast<long>(currentWeight));
         return true;
     }
 

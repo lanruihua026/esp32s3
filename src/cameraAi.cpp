@@ -10,12 +10,6 @@
 
 namespace // 匿名命名空间，限制内部工具函数作用域
 {         // 匿名命名空间开始
-    // 调试输出控制：设为 true 可打印详细的 UART 接收和状态检测信息
-    static constexpr bool CAM_DEBUG_VERBOSE = true; // 是否输出详细调试日志
-    // 周期性状态报告间隔（毫秒）
-    static constexpr uint32_t CAM_STATUS_REPORT_INTERVAL_MS = 5000; // 状态报告周期
-    static uint32_t s_lastStatusReportMs = 0;                       // 上次状态报告时间
-
     bool isPrintableProtocolChar(char c) // 仅保留协议可能使用到的 ASCII 可打印字符
     {
         const unsigned char uc = static_cast<unsigned char>(c);
@@ -79,54 +73,17 @@ namespace // 匿名命名空间，限制内部工具函数作用域
         const bool heartbeatMissing =                                                               // 判断摄像头心跳是否超时
             (g_lastCamHeartbeatMs == 0 || (now - g_lastCamHeartbeatMs) > CAM_HEARTBEAT_TIMEOUT_MS); // 超时条件
 
-        // 周期性状态报告
-        if (CAM_DEBUG_VERBOSE && (now - s_lastStatusReportMs) >= CAM_STATUS_REPORT_INTERVAL_MS) // 到达报告间隔
-        {                                                                                       // if 开始
-            s_lastStatusReportMs = now;                                                         // 更新报告时间
-            Serial.printf("[CAM-DBG] === STATUS REPORT ===\n");                                 // 打印状态标题
-            Serial.printf("[CAM-DBG] now=%lu, lastHeartbeat=%lu, diff=%lu ms\n",                // 打印当前时间和心跳差值
-                          now,                                                                  // 当前时间
-                          g_lastCamHeartbeatMs,                                                 // 最近一次心跳时间
-                          g_lastCamHeartbeatMs > 0 ? (now - g_lastCamHeartbeatMs) : 0);         // 心跳间隔
-            Serial.printf("[CAM-DBG] lastAiSuccess=%lu, diff=%lu ms\n",                         // 打印最近一次识别成功时间
-                          g_lastAiSuccessMs,                                                    // 最近一次识别成功时间
-                          g_lastAiSuccessMs > 0 ? (now - g_lastAiSuccessMs) : 0);               // AI 成功间隔
-            Serial.printf("[CAM-DBG] camReady=%d, aiOfflineReported=%d\n",                      // 打印摄像头和离线标记
-                          g_camReady ? 1 : 0, g_aiOfflineReported ? 1 : 0);                     // 布尔状态转成数字
-            Serial.printf("[CAM-DBG] heartbeatMissing=%d (timeout=%lu ms)\n",                   // 打印心跳是否超时
-                          heartbeatMissing ? 1 : 0, CAM_HEARTBEAT_TIMEOUT_MS);                  // 超时时间
-        } // 结束状态报告
-
         if (heartbeatMissing || !g_camReady)                                                  // 摄像头无心跳或未就绪
         {                                                                                     // if 开始
-            if (CAM_DEBUG_VERBOSE)                                                            // 需要打印离线原因
-            {                                                                                 // if 开始
-                Serial.printf("[CAM-DBG] -> CAM_OFFLINE: heartbeatMissing=%d, camReady=%d\n", // 打印摄像头离线原因
-                              heartbeatMissing ? 1 : 0, g_camReady ? 1 : 0);                  // 输出状态值
-            } // 结束调试输出
             setAiError(true, now, AI_ERR_CAM_OFFLINE); // 标记摄像头离线
             return;                                    // 直接结束
         } // 结束摄像头离线判断
 
-        const bool aiFrameTimedOut =                                                           // 仅用于诊断，不直接判定后端离线
-            (g_lastAiSuccessMs == 0 || (now - g_lastAiSuccessMs) > AI_OFFLINE_TIMEOUT_MS);    // 超时条件
         if (g_aiOfflineReported)                                                               // 仅当 CAM 显式上报后端离线时，才显示 AI_OFFLINE
         {                                                                                       // if 开始
-            if (CAM_DEBUG_VERBOSE)                                                              // 需要打印 AI 离线原因
-            {                                                                                   // if 开始
-                Serial.printf("[CAM-DBG] -> AI_OFFLINE: aiOfflineReported=%d, aiTimedOut=%d\n", // 打印 AI 离线原因
-                              g_aiOfflineReported ? 1 : 0, aiFrameTimedOut ? 1 : 0);            // 输出状态值
-            } // 结束调试输出
             setAiError(true, now, AI_ERR_SERVICE_OFFLINE); // 标记服务离线
             return;                                        // 直接结束
         } // 结束 AI 离线判断
-
-        if (CAM_DEBUG_VERBOSE && aiFrameTimedOut) // AI 帧陈旧但未收到显式离线帧，仅输出诊断，不误报离线
-        {
-            Serial.printf("[CAM-DBG] AI frame stale: lastAiSuccess=%lu, diff=%lu ms, keep service state normal\n",
-                          g_lastAiSuccessMs,
-                          g_lastAiSuccessMs > 0 ? (now - g_lastAiSuccessMs) : 0);
-        }
 
         setAiError(false, now); // 恢复正常状态
     } // 结束状态检查函数
@@ -143,12 +100,6 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             ++line;                           // 指针后移
         } // 结束行首空白处理
 
-        // 调试：打印收到的每行数据
-        if (CAM_DEBUG_VERBOSE)                                                         // 开启调试输出时打印原始行
-        {                                                                              // if 开始
-            Serial.printf("[CAM-DBG] RX LINE: \"%s\" (len=%d)\n", line, strlen(line)); // 输出收到的行内容
-        } // 结束调试打印
-
         uint32_t now = millis();    // 获取当前时间
         g_lastCamHeartbeatMs = now; // 更新摄像头心跳时间
 
@@ -157,10 +108,6 @@ namespace // 匿名命名空间，限制内部工具函数作用域
         if (strstr(line, "NO_WIFI") != nullptr)                                              // 摄像头上报无 WiFi
         {                                                                                   // if 开始
             g_camReady = false;                                                             // 标记摄像头未就绪
-            if (CAM_DEBUG_VERBOSE)                                                          // 需要打印调试信息
-            {                                                                               // if 开始
-                Serial.printf("[CAM-DBG] NO_WIFI -> camReady=false, heartbeat=%lu\n", now); // 打印无 WiFi 状态
-            } // 结束调试输出
             return; // 结束 NO_WIFI 处理
         } // 结束 NO_WIFI 判断
 
@@ -189,7 +136,6 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             setAiState(true, label, conf);                                           // 更新 AI 检测状态
             setAiError(false, now);                                                  // 清除错误状态
             g_lastAiSuccessMs = now;                                                 // 记录最近一次成功识别时间
-            Serial.printf("[CAM] DET label=%s conf=%.1f%%\n", label, conf * 100.0f); // 打印识别结果
             return;                                                                  // 结束 DET 处理
         } // 结束 DET 判断
 
@@ -200,7 +146,6 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             setAiState(false, "none", 0.0f); // 更新为未检测到目标
             setAiError(false, now);          // 清除错误状态
             g_lastAiSuccessMs = now;         // 记录本次成功通信时间
-            Serial.println("[CAM] NONE");    // 打印未识别到目标
             return;                          // 结束 NONE 处理
         } // 结束 NONE 判断
 
@@ -211,17 +156,12 @@ namespace // 匿名命名空间，限制内部工具函数作用域
             g_lastAiSuccessMs = now;                       // 记录本次协议帧时间，便于链路诊断
             setAiState(false, "none", 0.0f);               // 清空当前识别结果
             setAiError(true, now, AI_ERR_SERVICE_OFFLINE); // 标记服务离线
-            Serial.println("[CAM] AI OFFLINE");            // 打印 AI 离线提示
             return;                                        // 结束 AI_OFFLINE 处理
         } // 结束 AI_OFFLINE 判断
 
         if (strstr(line, "READY") != nullptr)                                            // 摄像头上报 READY
         {                                                                                // if 开始
             g_camReady = true;                                                           // 标记摄像头已就绪
-            if (CAM_DEBUG_VERBOSE)                                                       // 需要打印调试信息
-            {                                                                            // if 开始
-                Serial.printf("[CAM-DBG] READY -> camReady=true, heartbeat=%lu\n", now); // 打印就绪状态
-            } // 结束调试输出
             return; // 结束 READY 处理
         } // 结束 READY 判断
     } // 结束 parseCameraLine
@@ -234,14 +174,11 @@ void expireAiStateIfStale(uint32_t now) // 检查 AI 状态是否过期
 
 void pollCameraUart()                         // 轮询摄像头串口
 {                                             // 函数体开始
-    static uint32_t s_totalBytesReceived = 0; // 累计接收字节数
-    static uint32_t s_lastByteReportMs = 0;   // 上次统计输出时间
     static bool s_discardCurrentLine = false; // 缓冲区溢出后，整行丢弃直到下一个换行
 
     while (CameraUart.available())                           // 只要串口还有数据就继续读
     {                                                        // while 开始
         const char c = static_cast<char>(CameraUart.read()); // 读取一个字节
-        s_totalBytesReceived++;                              // 累加接收字节数
 
         if (c == '\r') // 丢弃回车符
         {              // if 开始
@@ -277,22 +214,10 @@ void pollCameraUart()                         // 轮询摄像头串口
         else // 缓冲区已满
         {    // else 开始
             // 缓冲区溢出，丢弃当前行
-            if (CAM_DEBUG_VERBOSE)                                                         // 需要输出溢出调试信息
-            {                                                                              // if 开始
-                Serial.println("[CAM-DBG] WARN: line buffer overflow, drop current line"); // 打印溢出警告
-            } // 结束调试输出
             g_camLinePos = 0;         // 清空当前缓冲
             s_discardCurrentLine = true; // 丢弃本行剩余内容，直到下一个换行
         } // 结束溢出处理
     } // 结束串口读取循环
-
-    // 每5秒报告一次接收统计
-    uint32_t now = millis();                                                               // 获取当前时间
-    if (CAM_DEBUG_VERBOSE && (now - s_lastByteReportMs) >= 5000)                           // 到达统计输出周期
-    {                                                                                      // if 开始
-        s_lastByteReportMs = now;                                                          // 更新统计时间
-        Serial.printf("[CAM-DBG] UART STATS: total_rx=%lu bytes\n", s_totalBytesReceived); // 打印累计接收字节数
-    } // 结束统计输出
 } // 结束摄像头串口轮询
 
 void updateServoByAiResult()                                 // 根据 AI 结果更新舵机
@@ -317,20 +242,14 @@ void updateServoByAiResult()                                 // 根据 AI 结果
             if (activeServo == 1)                                                                     // 1 号舵机
             {                                                                                         // if 开始
                 setServoAngle(0);                                                                     // 复位 1 号舵机
-                Serial.printf("[SERVO] HOME ch=1 GPIO%d angle=0 deg (hold %lu ms done)\n", SERVO_PIN, // 打印 1 号舵机复位日志
-                              static_cast<unsigned long>(SERVO_HOLD_MS));                             // 打印保持时间
             } // 结束 1 号舵机处理
             else if (activeServo == 2)                                                                  // 2 号舵机
             {                                                                                           // else-if 开始
                 setServoAngle2(0);                                                                      // 复位 2 号舵机
-                Serial.printf("[SERVO] HOME ch=2 GPIO%d angle=0 deg (hold %lu ms done)\n", SERVO_PIN_2, // 打印 2 号舵机复位日志
-                              static_cast<unsigned long>(SERVO_HOLD_MS));                               // 打印保持时间
             } // 结束 2 号舵机处理
             else if (activeServo == 3)                                                                  // 3 号舵机
             {                                                                                           // else-if 开始
                 setServoAngle3(0);                                                                      // 复位 3 号舵机
-                Serial.printf("[SERVO] HOME ch=3 GPIO%d angle=0 deg (hold %lu ms done)\n", SERVO_PIN_3, // 打印 3 号舵机复位日志
-                              static_cast<unsigned long>(SERVO_HOLD_MS));                               // 打印保持时间
             } // 结束 3 号舵机处理
             activeServo = 0;                                                      // 清除当前活动舵机
             waitForRearm = true;                                                  // 进入重新触发等待期
@@ -373,14 +292,11 @@ void updateServoByAiResult()                                 // 根据 AI 结果
         confirmCount = 1;                                                                                       // 从第一帧开始确认
         strncpy(confirmLabel, g_lastAiLabel, sizeof(confirmLabel) - 1);                                         // 记录新标签
         confirmLabel[sizeof(confirmLabel) - 1] = '\0';                                                          // 确保字符串结尾安全
-        Serial.printf("[SERVO] CONFIRM reset label=%s (need %d frames)\n", confirmLabel, SERVO_CONFIRM_FRAMES); // 打印确认重置日志
         return;                                                                                                 // 还未达到触发条件
     } // 结束新标签判断
     confirmCount++;                                                        // 累加确认帧数
     if (confirmCount < SERVO_CONFIRM_FRAMES)                               // 确认帧数不足
     {                                                                      // if 开始
-        Serial.printf("[SERVO] CONFIRM accumulate label=%s count=%d/%d\n", // 打印确认累计日志
-                      confirmLabel, confirmCount, SERVO_CONFIRM_FRAMES);   // 输出当前帧数
         return;                                                            // 继续等待
     } // 结束确认帧数判断
 
@@ -399,9 +315,6 @@ void updateServoByAiResult()                                 // 根据 AI 结果
         setServoAngle3(0);                                                                              // 3 号舵机复位
         activeServo = 1;                                                                                // 记录当前动作舵机
         triggerTimeMs = now;                                                                            // 记录触发时间
-        Serial.printf("[SERVO] TRIGGER ch=1 GPIO%d angle=180 deg label=%s conf=%.1f%% (hold %lu ms)\n", // 打印 1 号舵机触发日志
-                      SERVO_PIN, g_lastAiLabel, g_lastAiConf * 100.0f,                                  // 输出引脚、标签和置信度
-                      static_cast<unsigned long>(SERVO_HOLD_MS));                                       // 输出保持时间
     } // 结束电池分支
     else if (isMobile)                                                                                  // 手机目标
     {                                                                                                   // else-if 开始
@@ -410,9 +323,6 @@ void updateServoByAiResult()                                 // 根据 AI 结果
         setServoAngle3(0);                                                                              // 3 号舵机复位
         activeServo = 2;                                                                                // 记录当前动作舵机
         triggerTimeMs = now;                                                                            // 记录触发时间
-        Serial.printf("[SERVO] TRIGGER ch=2 GPIO%d angle=180 deg label=%s conf=%.1f%% (hold %lu ms)\n", // 打印 2 号舵机触发日志
-                      SERVO_PIN_2, g_lastAiLabel, g_lastAiConf * 100.0f,                                // 输出引脚、标签和置信度
-                      static_cast<unsigned long>(SERVO_HOLD_MS));                                       // 输出保持时间
     } // 结束手机分支
     else if (isAccessory)                                                                               // 配件目标
     {                                                                                                   // else-if 开始
@@ -421,8 +331,5 @@ void updateServoByAiResult()                                 // 根据 AI 结果
         setServoAngle3(180);                                                                            // 3 号舵机转到分拣位
         activeServo = 3;                                                                                // 记录当前动作舵机
         triggerTimeMs = now;                                                                            // 记录触发时间
-        Serial.printf("[SERVO] TRIGGER ch=3 GPIO%d angle=180 deg label=%s conf=%.1f%% (hold %lu ms)\n", // 打印 3 号舵机触发日志
-                      SERVO_PIN_3, g_lastAiLabel, g_lastAiConf * 100.0f,                                // 输出引脚、标签和置信度
-                      static_cast<unsigned long>(SERVO_HOLD_MS));                                       // 输出保持时间
     } // 结束配件分支
 } // 结束 updateServoByAiResult

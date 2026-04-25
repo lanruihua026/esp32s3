@@ -11,34 +11,27 @@
 
 void setup() // 系统上电初始化入口
 {
-    Serial.begin(115200);                       // 初始化串口，便于调试输出
+    Serial.begin(115200);
     g_prefsOk = gPrefs.begin("sysconf", false); // 打开 NVS 配置区，false 表示只读
-    if (!g_prefsOk)                             // 判断配置区是否打开成功
-    {
-        Serial.println("[NVS] Preferences begin failed; using defaults, persistence disabled"); // 提示使用默认值
-    }
+
     if (g_prefsOk) // NVS 可用时读取保存的配置
     {
         g_fullWeightG = gPrefs.getInt("full_w", 1000);        // 读取满载重量，默认 1000g
         g_aiConfThreshold = gPrefs.getFloat("ai_conf", 0.0f); // 读取 AI 置信度阈值，默认 0
     }
+
     if (g_fullWeightG < 100 || g_fullWeightG > 5000) // 检查重量阈值是否越界
     {
-        Serial.printf("[CONFIG] NVS full_w=%d out of range [100,5000], reset to 1000 g\n", g_fullWeightG); // 打印越界信息
-        g_fullWeightG = 1000;                                                                              // 恢复默认值
+        g_fullWeightG = 1000; // 恢复默认值
     }
-    if (!(g_aiConfThreshold >= 0.0f && g_aiConfThreshold <= 1.0f)) // 检查 AI 阈值是否在 0~1 之间
+    if (!(g_aiConfThreshold >= 0.0f && g_aiConfThreshold <= 1.0f)) // 检查模型检测阈值是否在 0~1 之间
     {
-        Serial.printf("[CONFIG] NVS ai_conf=%.4f out of range [0,1], reset to 0.0000\n", g_aiConfThreshold); // 打印越界信息
-        g_aiConfThreshold = 0.0f;                                                                            // 恢复默认值
-        if (g_prefsOk)                                                                                       // 仅在 NVS 可用时回写
+        g_aiConfThreshold = 0.0f; // 恢复默认值
+        if (g_prefsOk)            // 仅在 NVS 可用时回写
         {
             gPrefs.putFloat("ai_conf", g_aiConfThreshold); // 将修正后的阈值写回配置区
         }
     }
-    Serial.printf("[CONFIG] overflow_threshold_g=%d g, ai_conf_threshold=%.4f (%s)\n",    // 输出最终配置
-                  g_fullWeightG, g_aiConfThreshold, g_prefsOk ? "from NVS" : "defaults"); // 打印配置来源
-
     initBoardIndicators(); // 初始化板载指示灯
     initCameraUart();      // 初始化摄像头串口
     initOledModule();      // 初始化 OLED 显示屏

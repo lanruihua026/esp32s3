@@ -13,7 +13,7 @@ namespace
      * 设计目标：
      * 1. 每个舵机固定占用一个独立 LEDC 通道，彻底绕开 ESP32Servo 在 S3 上的 MCPWM 映射问题。
      * 2. 所有时间参数、脉宽参数集中定义，便于后续根据实际舵机型号微调。
-     * 3. 串口输出完整初始化、自检和写入失败信息，方便现场排查。
+     * 3. 提供明确的初始化、自检和写入失败状态，方便后续按需添加诊断。
      */
     constexpr uint32_t SERVO_PWM_FREQ_HZ = 50;             // 标准舵机刷新频率：50Hz，即周期 20ms
     constexpr uint8_t SERVO_PWM_RES_BITS = 14;             // ESP32-S3 LEDC 在低频下使用 14 位分辨率，精度足够且兼容性好
@@ -31,7 +31,7 @@ namespace
 
     struct ServoRuntime
     {
-        const char *name;  // 串口日志里使用的舵机名称
+        const char *name;  // 舵机名称
         uint8_t pin;       // 输出引脚
         uint8_t channel;   // 固定绑定的 LEDC 通道
         bool ready;        // 该路 LEDC 是否初始化成功
@@ -98,19 +98,8 @@ namespace
         const double actualFreq = ledcSetup(servo.channel, SERVO_PWM_FREQ_HZ, SERVO_PWM_RES_BITS);
         const bool setupOk = (actualFreq > 0.0);
 
-        Serial.printf("[SERVO_INIT] %s pin=%u channel=%u attached=%s freq=%luHz bits=%u pulse=%u-%uus\n",
-                      servo.name,
-                      servo.pin,
-                      servo.channel,
-                      setupOk ? "YES" : "NO",
-                      static_cast<unsigned long>(SERVO_PWM_FREQ_HZ),
-                      SERVO_PWM_RES_BITS,
-                      SERVO_MIN_PULSE_US,
-                      SERVO_MAX_PULSE_US);
-
         if (!setupOk)
         {
-            Serial.printf("[SERVO_INIT] %s LEDC setup failed, check timer resolution or channel conflict\n", servo.name);
             return false;
         }
 
@@ -131,8 +120,6 @@ namespace
     {
         if (!servo.ready)
         {
-            Serial.printf("[SERVO_WARN] %s pin=%u ignored angle=%d because LEDC not ready\n",
-                          servo.name, servo.pin, angle);
             return;
         }
 
@@ -154,19 +141,15 @@ namespace
     {
         if (!servo.ready)
         {
-            Serial.printf("[SERVO_SELFTEST] %s pin=%u skipped because LEDC not ready\n", servo.name, servo.pin);
             return;
         }
 
-        Serial.printf("[SERVO_SELFTEST] %s pin=%u -> 0 deg\n", servo.name, servo.pin);
         writeServoAngle(servo, 0);
         delay(settleMs);
 
-        Serial.printf("[SERVO_SELFTEST] %s pin=%u -> %d deg\n", servo.name, servo.pin, SERVO_SELFTEST_ANGLE);
         writeServoAngle(servo, SERVO_SELFTEST_ANGLE);
         delay(settleMs);
 
-        Serial.printf("[SERVO_SELFTEST] %s pin=%u -> 0 deg\n", servo.name, servo.pin);
         writeServoAngle(servo, 0);
         delay(settleMs);
     }
@@ -224,6 +207,5 @@ void runServoSelfTest(void (*beforeChannel)(uint8_t channel))
     {
         beforeChannel(0);
     }
-    Serial.println("[SERVO_SELFTEST] full self-test disabled (SERVO_FULL_SELFTEST_AT_BOOT=0), homing only");
 #endif
 }

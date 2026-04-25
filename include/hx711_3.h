@@ -77,7 +77,7 @@ bool initHx711Channel3(Preferences &prefs, bool prefsOk, float defaultScale, flo
  * @param cmd           已转为大写的命令字符串
  * @param prefs         Preferences 对象
  * @param prefsOk       Preferences 是否可用
- * @param currentWeight 当前重量（g），供 STATUS 打印
+ * @param currentWeight 当前重量（g），预留给 STATUS 扩展
  * @return true 命令已由本通道处理；false 不是本通道命令
  */
 bool handleHx711Command3(const char *cmd, Preferences &prefs, bool prefsOk, int32_t currentWeight);
