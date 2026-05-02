@@ -29,6 +29,34 @@ namespace
         return g_hx711_1InitOk && g_hx711_2InitOk && g_hx711_3InitOk;
     }
 
+    void applyHx711DefaultCalibrationProfile()
+    {
+        if (!HX711_WRITE_DEFAULT_CAL_TO_NVS || !g_prefsOk)
+        {
+            return;
+        }
+
+        const uint32_t storedVersion = gPrefs.getUInt("hx_cal_ver", 0);
+        if (storedVersion == HX711_CAL_PROFILE_VERSION)
+        {
+            return;
+        }
+
+        gPrefs.putFloat("hx1_scale", HX711_CAL_FACTOR_1);
+        gPrefs.putFloat("hx2_scale", HX711_CAL_FACTOR_2);
+        gPrefs.putFloat("hx3_scale", HX711_CAL_FACTOR_3);
+        gPrefs.remove("hx1_zero");
+        gPrefs.remove("hx2_zero");
+        gPrefs.remove("hx3_zero");
+        gPrefs.remove("hx1_dir");
+        gPrefs.remove("hx2_dir");
+        gPrefs.remove("hx3_dir");
+        gPrefs.putUInt("hx_cal_ver", HX711_CAL_PROFILE_VERSION);
+
+        Serial.printf("HX711 default calibration profile %lu written to NVS\r\n",
+                      static_cast<unsigned long>(HX711_CAL_PROFILE_VERSION));
+    }
+
     void onPropertySet(const char *payload, unsigned int len)
     {
         char buf[512] = {0};
@@ -155,6 +183,7 @@ void initOledModule()
 void initHx711Modules()
 {
     setInitModuleStatus(INIT_MODULE_HX711, INIT_RUNNING, "Probe");
+    applyHx711DefaultCalibrationProfile();
 
     if (HX711_BOOT_STRATEGY == 1)
     {

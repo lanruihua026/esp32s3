@@ -5,7 +5,7 @@
 
 namespace
 {
-    // ===== OneNET MQTT 模块内部状态 =====
+    // OneNET MQTT 模块内部状态。
     // 这里封装的是“联网后把三路垃圾桶数据上传到云平台”的能力。
 
     // MQTT 传输底层客户端。
@@ -21,7 +21,7 @@ namespace
         "",
         "",
         "",
-        0, // tokenExpireAt 占位，由 oneNetMqttBegin() 传入 main.cpp 的 ONENET_TOKEN_EXPIRE_AT
+        0,
         OneNetSignMethod::SHA256};
 
     // 是否已经完成参数配置。
@@ -37,7 +37,7 @@ namespace
     String gPropertyPostTopic;
     String gPropertyPostReplyTopic;
     String gPropertySetTopic;
-    String gPropertySetReplyTopic; // 设备收到 property/set 后必须在此 topic 回复，否则平台视为命令超时
+    String gPropertySetReplyTopic;
 
     /**
      * @brief 生成 OneNET token 所需的资源串
@@ -70,7 +70,7 @@ namespace
     {
         if (gPropertySetTopic.length() == 0 || strcmp(topic, gPropertySetTopic.c_str()) != 0)
         {
-            return; // 不是 property/set 消息，忽略
+            return;
         }
 
         // 先拷贝到本地缓冲区，避免直接操作 MQTT 回调入参。
@@ -177,7 +177,7 @@ void oneNetMqttBegin(const OneNetMqttConfig &config)
     gPropertyPostTopic = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/post";
     gPropertyPostReplyTopic = gPropertyPostTopic + "/reply";
     gPropertySetTopic = String("$sys/") + gConfig.productId + "/" + gConfig.deviceName + "/thing/property/set";
-    gPropertySetReplyTopic = gPropertySetTopic + "_reply"; // 设备回复平台下发的属性设置命令
+    gPropertySetReplyTopic = gPropertySetTopic + "_reply";
 
     gMqttClient.setServer(gConfig.host, gConfig.port);
     gMqttClient.setCallback(mqttCallback);

@@ -10,21 +10,21 @@ Adafruit_SH1106G oledDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // 2. 运行过程中的系统状态、三仓重量、AI 识别结果。
 static bool g_oledReady = false;
 
-// ===== 运行态显示所需共享状态 =====
-static int32_t currentWeight1 = 0; // 1号仓当前重量（g）
-static int32_t currentWeight2 = 0; // 2号仓当前重量（g）
-static int32_t currentWeight3 = 0; // 3号仓当前重量（g）
-static int32_t fullWeight = 1000;  // 满载阈值（g），由 main.cpp 通过 setFullWeight() 初始化
+// 运行态显示所需共享状态。
+static int32_t currentWeight1 = 0;
+static int32_t currentWeight2 = 0;
+static int32_t currentWeight3 = 0;
+static int32_t fullWeight = 1000;
 
 // Dirty flag 机制：
 // 只有数据变化时才重绘，避免 OLED 不停清屏导致闪烁。
-static bool g_displayDirty = true; // 初始强制绘制一次
+static bool g_displayDirty = true;
 
-// ===== OLED 页面管理 =====
+// OLED 页面管理。
 // 0 = 系统状态页；1 = 三仓重量页；2 = 识别结果页
 static uint8_t g_oledPage = 0;
 
-// ===== AI 识别结果缓存 =====
+// AI 识别结果缓存。
 static bool g_aiDetected = false;
 static char g_aiLabel[32] = "none";
 static float g_aiConf = 0.0f;
@@ -33,11 +33,11 @@ static bool g_aiError = false;
 static uint32_t g_aiErrorUpdateMs = 0;
 static AiErrorKind g_aiErrorKind = AI_ERR_NONE;
 
-// ===== 启动阶段状态缓存 =====
+// 启动阶段状态缓存。
 static InitModuleStatus g_initStatus[INIT_MODULE_COUNT] = {INIT_PENDING};
 static char g_initDetail[INIT_MODULE_COUNT][17] = {{0}};
 
-// ===== 运行态模块健康状态 =====
+// 运行态模块健康状态。
 static bool g_wifiOk = false;
 static bool g_wifiInitTimeout = false;
 static bool g_hx711Ok = false;
@@ -173,8 +173,8 @@ static const char *aiErrorKindText(AiErrorKind kind)
 {
     switch (kind)
     {
-    case AI_ERR_CAM_OFFLINE:     return "CAM OFFLINE";  // 摄像头设备离线
-    case AI_ERR_SERVICE_OFFLINE: return "AI OFFLINE";   // AI 服务离线
+    case AI_ERR_CAM_OFFLINE:     return "CAM OFFLINE";
+    case AI_ERR_SERVICE_OFFLINE: return "AI OFFLINE";
     case AI_ERR_NONE:
     default:                     return "--";
     }

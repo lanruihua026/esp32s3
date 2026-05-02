@@ -9,7 +9,7 @@
 namespace
 {
     constexpr float ZERO_DEADBAND_G = 2.0f;
-    constexpr float DIRECTION_LOCK_RAW_THRESHOLD = 30000.0f;
+    constexpr float MIN_CALIBRATION_FACTOR_RAW_PER_G = 50.0f;
     constexpr int TARE_MIN_VALID_SAMPLES = 8;
 }
 
@@ -95,10 +95,20 @@ float Hx711Channel::readAverageRaw(int samples, int *outValidCount) const
     return validCount > 0 ? static_cast<float>(sum) / validCount : 0.0f;
 }
 
-void Hx711Channel::resetDirection()
+void Hx711Channel::setScaleDirection(int8_t direction)
 {
-    scaleDirection_ = 1;
-    directionLocked_ = false;
+    if (direction > 0)
+    {
+        scaleDirection_ = 1;
+    }
+    else if (direction < 0)
+    {
+        scaleDirection_ = -1;
+    }
+    else
+    {
+        scaleDirection_ = 0;
+    }
 }
 
 bool Hx711Channel::setup()
@@ -145,6 +155,27 @@ bool Hx711Channel::init(Preferences &prefs, bool prefsOk, float defaultScale, fl
         prefs.putFloat(config_.scaleKey, defaultScale);
     }
 
+    if (prefs.isKey(config_.directionKey))
+    {
+        setScaleDirection(static_cast<int8_t>(prefs.getChar(config_.directionKey, 0)));
+    }
+    else
+    {
+        setScaleDirection(0);
+    }
+
+    if (HX711_BOOT_AUTO_TARE)
+    {
+        zeroValid_ = tare();
+        if (zeroValid_)
+        {
+            prefs.putFloat(config_.zeroKey, getZeroOffset());
+            Serial.printf("%s boot auto tare zero=%.0f\r\n", config_.label, getZeroOffset());
+            return true;
+        }
+        Serial.printf("%s boot auto tare failed; fallback to stored zero\r\n", config_.label);
+    }
+
     if (prefs.isKey(config_.zeroKey))
     {
         setZeroOffset(prefs.getFloat(config_.zeroKey, 0.0f));
@@ -155,6 +186,13 @@ bool Hx711Channel::init(Preferences &prefs, bool prefsOk, float defaultScale, fl
         if (loadMagnitude >= 0.0f && loadMagnitude < rezeroThreshold && tare())
         {
             prefs.putFloat(config_.zeroKey, getZeroOffset());
+        }
+        else if (loadMagnitude >= rezeroThreshold)
+        {
+            Serial.printf("%s boot zero differs by %.1fg; empty bin then send %s or TAREALL\r\n",
+                          config_.label,
+                          loadMagnitude,
+                          config_.tareCommand);
         }
         return true;
     }
@@ -182,19 +220,7 @@ float Hx711Channel::getWeight()
     }
 
     const float netValue = rawValue - zeroOffset_;
-    int8_t appliedDirection = scaleDirection_;
-    if (!directionLocked_ && fabsf(netValue) > DIRECTION_LOCK_RAW_THRESHOLD)
-    {
-        scaleDirection_ = (netValue >= 0.0f) ? 1 : -1;
-        directionLocked_ = true;
-        appliedDirection = scaleDirection_;
-    }
-    else if (!directionLocked_)
-    {
-        appliedDirection = (netValue >= 0.0f) ? 1 : -1;
-    }
-
-    float weight = (netValue * appliedDirection) / calibrationFactor_;
+    float weight = (scaleDirection_ == 0) ? (fabsf(netValue) / calibrationFactor_) : ((netValue * scaleDirection_) / calibrationFactor_);
     if (fabsf(weight) < ZERO_DEADBAND_G)
     {
         weight = 0.0f;
@@ -239,7 +265,14 @@ bool Hx711Channel::calibrate(float knownWeight)
         return false;
     }
 
-    calibrationFactor_ = fabsf(netValue) / knownWeight;
+    const float newCalibrationFactor = fabsf(netValue) / knownWeight;
+    if (newCalibrationFactor < MIN_CALIBRATION_FACTOR_RAW_PER_G)
+    {
+        return false;
+    }
+
+    calibrationFactor_ = newCalibrationFactor;
+    setScaleDirection((netValue >= 0.0f) ? 1 : -1);
     return true;
 }
 
@@ -259,7 +292,6 @@ bool Hx711Channel::tare()
 
     zeroOffset_ = avg;
     zeroValid_ = true;
-    resetDirection();
     return true;
 }
 
@@ -272,7 +304,6 @@ void Hx711Channel::setZeroOffset(float offset)
 {
     zeroOffset_ = offset;
     zeroValid_ = true;
-    resetDirection();
 }
 
 void Hx711Channel::setCalibrationFactor(float factor)
@@ -305,6 +336,11 @@ bool Hx711Channel::handleCommand(const char *cmd, Preferences &prefs, bool prefs
                 prefs.putFloat(config_.zeroKey, getZeroOffset());
             }
             calibrationReadyForCommand_ = true;
+            Serial.printf("%s TARE OK zero=%.0f\r\n", config_.label, getZeroOffset());
+        }
+        else
+        {
+            Serial.printf("%s TARE FAIL: HX711 not ready or too few samples\r\n", config_.label);
         }
         return true;
     }
@@ -318,11 +354,95 @@ bool Hx711Channel::handleCommand(const char *cmd, Preferences &prefs, bool prefs
             if (prefsOk)
             {
                 prefs.putFloat(config_.scaleKey, getCalibrationFactor());
+                prefs.putChar(config_.directionKey, scaleDirection_);
             }
+            Serial.printf("%s CAL OK scale=%.3f dir=%d\r\n", config_.label, getCalibrationFactor(), static_cast<int>(scaleDirection_));
             calibrationReadyForCommand_ = false;
+        }
+        else
+        {
+            Serial.printf("%s CAL FAIL: run %s on empty bin, then %s<known_g>; check raw response if this repeats\r\n",
+                          config_.label,
+                          config_.tareCommand,
+                          config_.calCommandPrefix);
         }
         return true;
     }
 
-    return strcmp(cmd, "STATUS") == 0;
+    return false;
+}
+
+void Hx711Channel::clearStoredCalibration(Preferences &prefs, bool prefsOk)
+{
+    setScaleDirection(0);
+    calibrationReadyForCommand_ = false;
+    if (prefsOk)
+    {
+        prefs.remove(config_.scaleKey);
+        prefs.remove(config_.zeroKey);
+        prefs.remove(config_.directionKey);
+    }
+    Serial.printf("%s stored HX711 calibration cleared; reboot or send %s on empty bin\r\n",
+                  config_.label,
+                  config_.tareCommand);
+}
+
+void Hx711Channel::printStatus(Print &out, int32_t reportedWeight)
+{
+    int validCount = 0;
+    const float rawValue = readAverageRaw(5, &validCount);
+    const float netValue = rawValue - zeroOffset_;
+    const float calculatedWeight = (validCount == 0 || !hardwareReady_)
+                                       ? 0.0f
+                                       : ((scaleDirection_ == 0) ? (fabsf(netValue) / calibrationFactor_) : ((netValue * scaleDirection_) / calibrationFactor_));
+    const char *direction = (scaleDirection_ > 0) ? "+" : ((scaleDirection_ < 0) ? "-" : "auto");
+
+    out.printf("%s ready=%d valid=%d raw=%.0f zero=%.0f net=%.0f scale=%.3f dir=%s calc=%.1fg report=%ldg\r\n",
+               config_.label,
+               hardwareReady_ ? 1 : 0,
+               validCount,
+               rawValue,
+               zeroOffset_,
+               netValue,
+               calibrationFactor_,
+               direction,
+               calculatedWeight,
+               static_cast<long>(reportedWeight));
+}
+
+void Hx711Channel::printRawSamples(Print &out, uint8_t samples, uint16_t delayMs)
+{
+    if (samples == 0)
+    {
+        samples = 1;
+    }
+    if (samples > 30)
+    {
+        samples = 30;
+    }
+
+    out.printf("%s RAW samples=%u zero=%.0f scale=%.3f dir=%s\r\n",
+               config_.label,
+               static_cast<unsigned>(samples),
+               zeroOffset_,
+               calibrationFactor_,
+               (scaleDirection_ > 0) ? "+" : ((scaleDirection_ < 0) ? "-" : "auto"));
+
+    for (uint8_t i = 0; i < samples; ++i)
+    {
+        const int32_t raw = readRawData();
+        const float netValue = static_cast<float>(raw) - zeroOffset_;
+        const float grams = fabsf(netValue) / calibrationFactor_;
+        out.printf("%s RAW[%02u] raw=%ld net=%.0f abs=%.1fg\r\n",
+                   config_.label,
+                   static_cast<unsigned>(i + 1),
+                   static_cast<long>(raw),
+                   netValue,
+                   grams);
+
+        if (delayMs > 0 && i + 1 < samples)
+        {
+            delay(delayMs);
+        }
+    }
 }

@@ -5,10 +5,12 @@
 namespace
 {
     Hx711Channel g_channel2({
+        "B2",
         11,
         12,
         "hx2_scale",
         "hx2_zero",
+        "hx2_dir",
         "TARE2",
         "CAL2:",
         150.0f,
@@ -63,6 +65,21 @@ void setZeroOffset2(float offset)
 bool initHx711Channel2(Preferences &prefs, bool prefsOk, float defaultScale, float bootEmptyThreshold)
 {
     return g_channel2.init(prefs, prefsOk, defaultScale, bootEmptyThreshold);
+}
+
+void printHx711Status2(Print &out, int32_t currentWeight)
+{
+    g_channel2.printStatus(out, currentWeight);
+}
+
+void printHx711RawSamples2(Print &out, uint8_t samples, uint16_t delayMs)
+{
+    g_channel2.printRawSamples(out, samples, delayMs);
+}
+
+void clearHx711StoredCalibration2(Preferences &prefs, bool prefsOk)
+{
+    g_channel2.clearStoredCalibration(prefs, prefsOk);
 }
 
 bool handleHx711Command2(const char *cmd, Preferences &prefs, bool prefsOk, int32_t)

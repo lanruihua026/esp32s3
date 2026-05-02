@@ -6,7 +6,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-// ===== OLED 硬件参数 =====
+// OLED 硬件参数。
 // 128x64 I2C OLED（SH1106）
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -20,7 +20,7 @@
 // 全局 OLED 对象（在 oledInit.cpp 中定义）
 extern Adafruit_SH1106G oledDisplay;
 
-// ===== 启动阶段状态 =====
+// 启动阶段状态。
 enum InitModuleId : uint8_t
 {
     INIT_MODULE_OLED = 0,

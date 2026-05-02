@@ -15,14 +15,14 @@ namespace
      * 2. 所有时间参数、脉宽参数集中定义，便于后续根据实际舵机型号微调。
      * 3. 提供明确的初始化、自检和写入失败状态，方便后续按需添加诊断。
      */
-    constexpr uint32_t SERVO_PWM_FREQ_HZ = 50;             // 标准舵机刷新频率：50Hz，即周期 20ms
-    constexpr uint8_t SERVO_PWM_RES_BITS = 14;             // ESP32-S3 LEDC 在低频下使用 14 位分辨率，精度足够且兼容性好
+    constexpr uint32_t SERVO_PWM_FREQ_HZ = 50;
+    constexpr uint8_t SERVO_PWM_RES_BITS = 14;
     constexpr uint32_t SERVO_PWM_MAX_DUTY = (1UL << SERVO_PWM_RES_BITS) - 1UL;
-    constexpr uint32_t SERVO_PERIOD_US = 1000000UL / SERVO_PWM_FREQ_HZ; // 20,000us
-    constexpr uint16_t SERVO_MIN_PULSE_US = 500;          // 0° 典型控制脉宽
-    constexpr uint16_t SERVO_MAX_PULSE_US = 2400;         // 180° 典型控制脉宽
-    constexpr int SERVO_SELFTEST_ANGLE = 90;              // 开机自检转到中位，便于观察
-    constexpr uint16_t SERVO_SETTLE_MS = 600;             // 每一步动作后的等待时间，保证转动足够明显
+    constexpr uint32_t SERVO_PERIOD_US = 1000000UL / SERVO_PWM_FREQ_HZ;
+    constexpr uint16_t SERVO_MIN_PULSE_US = 500;
+    constexpr uint16_t SERVO_MAX_PULSE_US = 2400;
+    constexpr int SERVO_SELFTEST_ANGLE = 90;
+    constexpr uint16_t SERVO_SETTLE_MS = 600;
 
     // 为三路舵机显式指定不同的 LEDC 通道，确保它们的 PWM 信号完全独立。
     constexpr uint8_t SERVO1_CHANNEL = 0;
@@ -31,11 +31,11 @@ namespace
 
     struct ServoRuntime
     {
-        const char *name;  // 舵机名称
-        uint8_t pin;       // 输出引脚
-        uint8_t channel;   // 固定绑定的 LEDC 通道
-        bool ready;        // 该路 LEDC 是否初始化成功
-        int lastAngle;     // 最近一次写入的角度，便于日志和后续扩展
+        const char *name;
+        uint8_t pin;
+        uint8_t channel;
+        bool ready;
+        int lastAngle;
     };
 
     ServoRuntime g_servo1 = {"servo1", SERVO_PIN, SERVO1_CHANNEL, false, 0};
@@ -153,7 +153,7 @@ namespace
         writeServoAngle(servo, 0);
         delay(settleMs);
     }
-} // namespace
+}
 
 void initServo()
 {

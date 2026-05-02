@@ -11,6 +11,9 @@
  */
 constexpr int HX711_BOOT_STRATEGY = 0;
 
+// true = 每次上电初始化时都把当前空仓读数写为零点。设备上电时必须保持三仓空载。
+constexpr bool HX711_BOOT_AUTO_TARE = true;
+
 constexpr uint32_t HX711_GLOBAL_WARMUP_MS = 1200;
 constexpr uint32_t HX711_PER_CHANNEL_WARMUP_MS = 1200;
 

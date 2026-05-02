@@ -61,10 +61,10 @@ bool oneNetMqttConnected();
  */
 struct BoxBinData
 {
-    int32_t weight; // 当前重量 (g)
-    float percent;  // 满溢百分比 (%)
-    bool nearFull;  // 是否即将满载（>= 90% 阈值）
-    bool full;      // 是否满溢
+    int32_t weight;
+    float percent;
+    bool nearFull;
+    bool full;
 };
 
 /**
@@ -90,7 +90,7 @@ bool oneNetMqttUploadProperties(
  *
  * 使用示例（main.cpp 中）：
  *   oneNetSetPropertySetCallback([](const char* payload, unsigned int len) {
- *       // 解析 OneJSON payload，更新本地阈值
+ *
  *   });
  */
 void oneNetSetPropertySetCallback(void (*cb)(const char *payload, unsigned int len));

@@ -73,6 +73,21 @@ void setZeroOffset2(float offset);
 bool initHx711Channel2(Preferences &prefs, bool prefsOk, float defaultScale, float bootEmptyThreshold);
 
 /**
+ * @brief 打印 2 号 HX711 调试状态（原始值、零点、方向、换算重量）
+ */
+void printHx711Status2(Print &out, int32_t currentWeight);
+
+/**
+ * @brief 打印 2 号 HX711 连续原始采样，用于检查传感器是否真实受力
+ */
+void printHx711RawSamples2(Print &out, uint8_t samples, uint16_t delayMs);
+
+/**
+ * @brief 清除 2 号 HX711 保存在 NVS 中的校准系数、零点和方向
+ */
+void clearHx711StoredCalibration2(Preferences &prefs, bool prefsOk);
+
+/**
  * @brief 处理单条 2 号 HX711 标定命令
  * @param cmd           已转为大写的命令字符串
  * @param prefs         Preferences 对象
@@ -83,4 +98,4 @@ bool initHx711Channel2(Preferences &prefs, bool prefsOk, float defaultScale, flo
 bool handleHx711Command2(const char *cmd, Preferences &prefs, bool prefsOk, int32_t currentWeight);
 
 
-#endif // HX711_2_H
+#endif

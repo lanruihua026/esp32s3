@@ -3,10 +3,10 @@
 
 #include <Arduino.h>
 
-// ===== 舵机 GPIO 引脚定义 =====
-#define SERVO_PIN   7  // 舵机 1（电池仓分拣机构）信号线所在 GPIO 引脚
-#define SERVO_PIN_2 8  // 舵机 2（手机仓分拣机构）信号线所在 GPIO 引脚
-#define SERVO_PIN_3 16 // 舵机 3（数码配件仓分拣机构）信号线所在 GPIO 引脚
+// 舵机 GPIO 引脚定义。
+#define SERVO_PIN   7
+#define SERVO_PIN_2 8
+#define SERVO_PIN_3 16
 
 /**
  * @brief 初始化三路舵机
