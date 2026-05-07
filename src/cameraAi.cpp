@@ -84,18 +84,52 @@ namespace
         g_aiOfflineReported = false;
     }
 
+    bool isCameraHeartbeatFresh(uint32_t now)
+    {
+        return g_lastCamHeartbeatMs != 0 && (now - g_lastCamHeartbeatMs) <= CAM_HEARTBEAT_TIMEOUT_MS;
+    }
+
+    bool isAiResultFresh(uint32_t now)
+    {
+        return g_lastAiUpdateMs != 0 && (now - g_lastAiUpdateMs) <= AI_OFFLINE_TIMEOUT_MS;
+    }
+
+    void clearActionableAiResult(uint32_t now)
+    {
+        if (!g_lastAiDetected && strcmp(g_lastAiLabel, "none") == 0 && g_lastAiConf == 0.0f)
+        {
+            return;
+        }
+
+        g_lastAiDetected = false;
+        g_lastAiConf = 0.0f;
+        g_lastAiUpdateMs = now;
+        strncpy(g_lastAiLabel, "none", sizeof(g_lastAiLabel) - 1);
+        g_lastAiLabel[sizeof(g_lastAiLabel) - 1] = '\0';
+        setAiResult(false, g_lastAiLabel, g_lastAiConf, g_lastAiUpdateMs);
+    }
+
+    bool isAiResultActionable(uint32_t now)
+    {
+        return g_lastAiDetected &&
+               isAiResultFresh(now) &&
+               g_camReady &&
+               !g_aiOfflineReported &&
+               isCameraHeartbeatFresh(now);
+    }
+
     void checkDeviceAndServiceStatus(uint32_t now)
     {
         // 重新获取当前时间，避免与 parseCameraLine 中更新的时间戳不一致
         // （loop 开始时的 now 可能比 pollCameraUart 中更新的 g_lastCamHeartbeatMs 旧）
         now = millis();
 
-        const bool heartbeatMissing =
-            (g_lastCamHeartbeatMs == 0 || (now - g_lastCamHeartbeatMs) > CAM_HEARTBEAT_TIMEOUT_MS);
+        const bool heartbeatMissing = !isCameraHeartbeatFresh(now);
 
         // 摄像头本体无心跳时优先显示 CAM 离线，而不是把问题误判为模型服务异常。
         if (heartbeatMissing || !g_camReady)
         {
+            clearActionableAiResult(now);
             setAiError(true, now, AI_ERR_CAM_OFFLINE);
             return;
         }
@@ -103,8 +137,14 @@ namespace
         // 摄像头在线但后端上报 AI_OFFLINE 时，说明问题位于推理服务或网络到服务器链路。
         if (g_aiOfflineReported)
         {
+            clearActionableAiResult(now);
             setAiError(true, now, AI_ERR_SERVICE_OFFLINE);
             return;
+        }
+
+        if (g_lastAiDetected && !isAiResultFresh(now))
+        {
+            clearActionableAiResult(now);
         }
 
         setAiError(false, now);
@@ -303,7 +343,7 @@ void updateServoByAiResult()
     if (waitForRearm)
     {
         // 防重复触发：同一目标停留在画面内时，等待目标消失、标签变化或超时后再允许下一次分拣。
-        if (!g_lastAiDetected)
+        if (!isAiResultActionable(now))
         {
             waitForRearm = false;
         }
@@ -321,8 +361,8 @@ void updateServoByAiResult()
         }
     }
 
-    // 未检测到目标或低于阈值时清空连续确认计数，避免上一目标残留触发。
-    if (!g_lastAiDetected || (g_aiConfThreshold > 0.0f && g_lastAiConf < g_aiConfThreshold))
+    // 未检测到有效新结果、结果过期或低于阈值时清空连续确认计数，避免上一目标残留触发。
+    if (!isAiResultActionable(now) || (g_aiConfThreshold > 0.0f && g_lastAiConf < g_aiConfThreshold))
     {
         confirmCount = 0;
         confirmLabel[0] = '\0';
